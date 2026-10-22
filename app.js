@@ -126,7 +126,7 @@
     $("#navWeekLabel").hidden = !D.invites.length;
     $("#navWeek").innerHTML = D.invites.map((i) => '<li><a href="#/calls/' + i.id + '" title="' + esc(i.company + ", " + splitWhen(i.when).day) + '"' + (cur === "call" && app.callId === i.id ? ' aria-current="page"' : "")
       + '><span class="sq" aria-hidden="true" style="background:' + C.solid(i.company) + '">' + esc(i.company.charAt(0)) + '</span><span class="label">' + esc(i.company) + '</span><span class="count">' + esc(splitWhen(i.when).day.slice(0, 3)) + "</span></a></li>").join("");
-    $("#navFoot").innerHTML = link("#/settings", "settings", "Settings", "", cur === "settings")
+    $("#navFoot").innerHTML = link("#/settings", "settings", "Settings", "", cur === "settings" || cur === "guides")
       + link("#/data", "database", "Data", '<span class="status">' + (C.state.liveData ? "Live" : "Saved") + "</span>", cur === "data");
   }
 
@@ -142,6 +142,7 @@
     if (p[0] === "companies") return p[1] ? { view: "company", slug: p[1] } : { view: "companies" };
     if (p[0] === "people") return p[1] ? { view: "people", key: p[1] } : { view: "map" }; // #/people/<key>: one guest's profile (the key is never their email)
     if (p[0] === "settings") return { view: "settings", menu: p[1] || null };
+    if (p[0] === "guides") return { view: "guides", guide: p[1] || null }; // setup guides drawn from docs/*.md
     if (["map", "live", "data"].includes(p[0])) return { view: p[0] };
     return { view: "home", bad: true };
   }
@@ -184,6 +185,7 @@
     else if (r.view === "live") renderLive();
     else if (r.view === "data") renderData();
     else if (r.view === "settings" && window.MoabSettingsPage) title = window.MoabSettingsPage.render(r.menu) || title;
+    else if (r.view === "guides" && window.MoabGuides) title = window.MoabGuides.show(r.guide, $('[data-view="guides"]'));
     renderNav();
     placeSearchInput();
     document.title = (title ? title + " · " : "") + "MOAB";
@@ -214,7 +216,7 @@
       note = "MOAB's server isn't answering, or an older copy is running. Restart <code>server.py</code>, then reload this page.";
     } else if (!st.google.configured) {
       action = '<span class="btn primary" aria-disabled="true">Connect Google Calendar</span>';
-      note = 'Google sign-in isn\'t set up on this PC yet. <a href="docs/GOOGLE-SETUP.md" target="_blank" rel="noopener">Set it up in a few steps' + NEW_TAB + "</a>, then restart <code>server.py</code>.";
+      note = 'Google sign-in isn\'t set up on this PC yet. <a href="#/guides/google">Set it up in a few steps</a>' + ", then restart <code>server.py</code>.";
     } else {
       action = '<a class="btn primary" href="/auth/google">' + (st.google.connected ? "Connect again" : "Connect Google Calendar") + "</a>";
       if (err) note = "Google Calendar didn't answer: " + esc(err) + ' <a href="#/home" data-reload="1">Try again</a>';
@@ -473,7 +475,7 @@
   function connectHero() {
     const st = C.state, ok = st.server && st.google.configured;
     const note = !st.server ? "MOAB's server isn't answering, or an older copy is running. Restart <code>server.py</code>, then reload."
-      : !st.google.configured ? 'Google sign-in isn\'t set up on this PC yet. <a href="docs/GOOGLE-SETUP.md" target="_blank" rel="noopener">Set it up in a few steps' + NEW_TAB + "</a>, then restart <code>server.py</code>." : "";
+      : !st.google.configured ? 'Google sign-in isn\'t set up on this PC yet. <a href="#/guides/google">Set it up in a few steps</a>' + ", then restart <code>server.py</code>." : "";
     return '<p class="eyebrow">' + esc(today().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })) + "</p>"
       + '<h1 class="page-title hero-big" tabindex="-1">Every call,<br><span class="grad-text">prepped by MOAB</span></h1>'
       + '<p class="hero-sub">Connect your calendar and MOAB gets you ready for each one.</p>'
@@ -2118,7 +2120,7 @@
       + '<div class="lv-steps"><h3>Zoom App</h3><ol><li>Host on HTTPS with the four security headers Zoom requires (see <code>_headers</code>). GitHub Pages does not send them.</li>'
       + "<li>Create a <b>General app</b> in the Zoom App Marketplace. Set the Home URL to <code>…/panel.html?host=zoom</code> and add the host and <code>appssdk.zoom.us</code> to the domain allow list.</li>"
       + "<li>Add the in-meeting APIs (meeting context, participants) and the <code>zoomapp:inmeeting</code> scope.</li><li>Use Local Test → Add App Now, then open it from <b>Apps</b> in a meeting.</li></ol></div></div>"
-      + '<p class="list-foot">Full steps and the facts behind them: <a href="docs/IN-CALL.md" target="_blank" rel="noopener">docs/IN-CALL.md' + NEW_TAB + "</a></p></section>";
+      + '<p class="list-foot">Full steps: <a href="#/guides/extension">Put MOAB beside Google Meet and Zoom</a> · <a href="#/guides/in-call">How the in-call panel works</a> · <a href="#/guides">All setup guides</a></p></section>';
   }
 
   // ---------- data page ----------
@@ -2132,13 +2134,13 @@
     // Connections: where MOAB's real data comes from, and who answers questions.
     let cal;
     if (!st.server) cal = row("calendar", "Google Calendar", "MOAB's server isn't answering, or an older copy is running. Restart <code>server.py</code>, then reload.", "Offline", false);
-    else if (!g.configured) cal = row("calendar", "Google Calendar", 'Sign-in isn\'t set up on this PC yet. <a href="docs/GOOGLE-SETUP.md" target="_blank" rel="noopener">Set it up' + NEW_TAB + "</a>, then restart <code>server.py</code>.", "Not set up", false);
+    else if (!g.configured) cal = row("calendar", "Google Calendar", 'Sign-in isn\'t set up on this PC yet. <a href="#/guides/google">Set it up</a>' + ", then restart <code>server.py</code>.", "Not set up", false);
     else if (g.connected) cal = row("calendar", "Google Calendar", "Connected as " + esc(g.email || "your Google account") + " · read-only, the next 14 days"
       + (window.MOAB_LIVE_ERROR ? ". Last try failed: " + esc(window.MOAB_LIVE_ERROR) : ""), "Connected", !window.MOAB_LIVE_ERROR, '<button type="button" class="btn ghost sm" data-disconnect>Disconnect</button>');
     else cal = row("calendar", "Google Calendar", "Not connected. MOAB only asks to read your calendar.", "Not connected", false, '<a class="btn secondary sm" href="/auth/google">Connect</a>');
     const syncTime = (iso) => (iso ? new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "");
     const crmRow = (key, icon, label, what, doc) => {
-      const x = st[key] || {}, how = '<a href="' + doc + '" target="_blank" rel="noopener">How to connect' + NEW_TAB + "</a>";
+      const x = st[key] || {}, how = '<a href="' + doc + '">How to connect</a>';
       if (!st.server) return row(icon, label, "MOAB's server isn't answering. Restart <code>server.py</code>, then reload.", "Offline", false);
       if (!x.configured) return row(icon, label, "Not connected. " + what + " " + how + ".", "Not set up", false);
       const who = key === "hubspot" ? (x.portal ? "Connected to " + esc(x.portal) : "Connected") : (x.workspace ? "Connected to " + esc(x.workspace) : "Connected");
@@ -2146,8 +2148,8 @@
         + (x.lastError ? '. <span class="err-text">Last error: ' + esc(x.lastError) + "</span>" : "") + ". " + what + " " + how + ".",
         x.lastError ? "Error" : x.connected ? "Connected" : "Set up", x.connected && !x.lastError);
     };
-    const hubspotRow = crmRow("hubspot", "building", "HubSpot", "Reads companies, deals, contacts and notes. Writes only when you press Save to HubSpot after a call.", "docs/HUBSPOT-SETUP.md");
-    const gongRow = crmRow("gong", "phone", "Gong", "Reads the last call's summary, key points, topics and trackers. Reads a call's transcript only when you turn that on in Settings.", "docs/GONG-SETUP.md");
+    const hubspotRow = crmRow("hubspot", "building", "HubSpot", "Reads companies, deals, contacts and notes. Writes only when you press Save to HubSpot after a call.", "#/guides/hubspot");
+    const gongRow = crmRow("gong", "phone", "Gong", "Reads the last call's summary, key points, topics and trackers. Reads a call's transcript only when you turn that on in Settings.", "#/guides/gong");
     // The privacy switches (Gong transcripts, transcripts and Gong notes in AI answers) live in Settings > Research sources & privacy now.
     const rp = C.prefs() ? C.prefs().research : {}, onOff = (v) => (v ? "on" : "off");
     const privacyRow = '<div class="row"><span class="src-tile">' + ic("shield") + '</span><span class="src-text"><span class="row-title">Research sources and privacy</span>'

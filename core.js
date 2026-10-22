@@ -718,8 +718,10 @@
         h += '<p class="rs-actions"><button type="button" class="btn secondary sm" data-rs-confirm="' + esc(p.email) + '" aria-label="' + esc("Confirm what MOAB found about " + p.name) + '">' + ic("check") + "Confirm</button>" + edit + "</p>";
       }
     } else if (r.note) {
-      h += '<p class="rs-note">' + esc(r.note) + (opts.actions && MODE === "live" && (r.status === "unknown" || r.status === "error")
-        ? ' <button type="button" class="link-btn" data-rs-again="' + esc(p.email) + '">' + (r.status === "error" ? "Try again" : "Look up again") + "</button>" : "") + "</p>";
+      // The pill above already says "Can't find this person", so the note starts at the reason.
+      const note = r.status === "notfound" ? r.note.replace(/^Can't find this person: /, "").replace(/^./, (c) => c.toUpperCase()) : r.note;
+      h += '<p class="rs-note">' + esc(note) + (opts.actions && MODE === "live" && (r.status === "unknown" || r.status === "error" || r.status === "later")
+        ? ' <button type="button" class="link-btn" data-rs-again="' + esc(p.email) + '">' + (r.status === "error" ? "Try again" : r.status === "later" ? "Look up now" : "Look up again") + "</button>" : "") + "</p>";
     }
     const bits = [local.company ? local.company + " (from their email)" : "", local.adopter ? "On the Backstage adopters list" : "",
       local.company ? (local.metBefore ? "Met before, last on " + local.lastMet : "First meeting with them") : ""].filter(Boolean);

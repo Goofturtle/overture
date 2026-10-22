@@ -158,7 +158,7 @@
       const keyBox = group("Claude API key", '<form class="st-pad st-key" id="claudeKeyForm" autocomplete="off">'
         + '<p class="st-key-state" id="claudeKeyState" role="status">' + (DEMO ? "Not available in the demo." : "Checking…") + "</p>"
         + '<div class="st-key-row"><label class="sr-only" for="claudeKey">Claude API key</label>'
-        + '<input id="claudeKey" class="input sm" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"' + (DEMO ? " disabled" : "") + ">"
+        + '<input id="claudeKey" class="input sm" type="password" placeholder="sk-ant-…" autocomplete="new-password" spellcheck="false" aria-describedby="claudeKeyState"' + (DEMO ? " disabled" : "") + ">"
         + '<button type="submit" class="btn primary sm"' + (DEMO ? " disabled" : "") + ">Save key</button>"
         + '<button type="button" class="btn ghost sm" id="claudeKeyRemove" hidden>Remove</button></div>'
         + '<p class="st-key-help">Get one at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">console.anthropic.com</a> → API keys. '
@@ -168,8 +168,8 @@
           + row("srcHub", "HubSpot", "Company status, deals, notes and guests' job titles." + conn(st.hubspot), toggle("srcHub", r.hubspot, "research.hubspot"))
           + row("srcGong", "Gong", "The last call's summary, key points, topics and trackers." + conn(st.gong), toggle("srcGong", r.gong, "research.gong"))
           + row("gongTranscripts", "Read Gong transcripts", "Off: MOAB never asks Gong for a transcript. On: After the call can read a call's transcript from Gong to find the people mentioned. Only who was mentioned and one sentence each are kept.", toggle("gongTranscripts", r.gongTranscripts, "research.gongTranscripts", !r.gong))
-          + row("srcMeetily", "Meetily", "Live transcript from Meetily, read from its files on this PC while a call runs (docs/MEETILY-SETUP.md). Names and companies said go to the mentions as they come; the transcript is never kept or sent anywhere. Off by default." + (st.meetily && st.meetily.on && !st.meetily.found ? ' <span class="st-tag">Recordings folder not found</span>' : ""), toggle("srcMeetily", r.meetily, "research.meetily"))
-          + row("srcGranola", "Granola", "After a call, MOAB reads its Granola note and transcript (docs/GRANOLA-SETUP.md): the people and companies mentioned, and the note's summary under After the call. The transcript isn't kept. Off by default." + conn(st.granola), toggle("srcGranola", r.granola, "research.granola")))
+          + row("srcMeetily", "Meetily", "Live transcript from Meetily, read from its files on this PC while a call runs (<a href=\"#/guides/meetily\">setup guide</a>). Names and companies said go to the mentions as they come; the transcript is never kept or sent anywhere. Off by default." + (st.meetily && st.meetily.on && !st.meetily.found ? ' <span class="st-tag">Recordings folder not found</span>' : ""), toggle("srcMeetily", r.meetily, "research.meetily"))
+          + row("srcGranola", "Granola", "After a call, MOAB reads its Granola note and transcript (<a href=\"#/guides/granola\">setup guide</a>): the people and companies mentioned, and the note's summary under After the call. The transcript isn't kept. Off by default." + conn(st.granola), toggle("srcGranola", r.granola, "research.granola")))
         + group("What may go to AI", row("aiShare", "Claude may see", "Titles only: names, titles and companies. Plus call notes: also your call notes and the notes in MOAB's records. Plus transcripts: also who was mentioned on a call and their sentence (this is the old “Use transcripts in AI answers” switch).",
             segmented("aiShare", r.aiShare, "research.aiShare", [["titles", "Titles only"], ["notes", "+ call notes"], ["transcripts", "+ transcripts"]]), { group: true })
           + row("transcriptsInAI", "Use transcripts in AI answers", "Off: nothing from a transcript goes to Claude. On: Ask MOAB also sees who was mentioned on a call and the sentence they came up in.", toggle("transcriptsInAI", r.transcriptsInAI, "research.transcriptsInAI"))
@@ -218,7 +218,7 @@
       st.textContent = (msg ? msg + " " : "") + (j.saved ? (j.source === "env" ? "Using the key from the ANTHROPIC_API_KEY setting (ends in " + j.last4 + ")." : "Key saved on this PC (ends in " + j.last4 + "). Web lookups are on.") : "No key yet. Web lookups and Ask MOAB answers are off.");
       st.classList.toggle("ok", !!j.saved);
       // The box empties after a save so the key never sits on screen; show that it's saved instead of looking wiped.
-      const inp = $("#claudeKey"); if (inp) inp.placeholder = j.saved ? "•••••••••••• " + j.last4 + "  (saved: paste a new key to replace it)" : "sk-ant-…";
+      const inp = $("#claudeKey"); if (inp) inp.placeholder = j.saved ? "Saved, ends in " + j.last4 : "sk-ant-…";
       const rm = $("#claudeKeyRemove"); if (rm) rm.hidden = !(j.saved && j.source === "file");
     } catch (e) { st.textContent = "MOAB's server isn't answering."; }
   }
@@ -228,9 +228,9 @@
     const input = $("#claudeKey"), key = input.value.trim();
     if (!key) { input.focus(); return; }
     try {
+      input.value = "";  // never leave the key in the box, whatever the server answers
       const r = await fetch("/api/claude-key", { method: "PUT", headers: { "Content-Type": "application/json", "X-MOAB": "1" }, body: JSON.stringify({ key }) });
       const j = await r.json();
-      input.value = "";
       if (!r.ok) { $("#claudeKeyState").textContent = j.error || "Couldn't save the key."; input.focus(); return; }
       claudeKeyRefresh("Saved.");
       C.state.claudeOn = true;
@@ -252,7 +252,8 @@
     // The open menu's name is the page's h1 (it gets focus on arrival); with no menu open, "Settings" is.
     const nav = '<nav class="st-nav" aria-label="Settings menus">' + (m ? '<p class="st-title">Settings</p>' : '<h1 class="page-title st-title" tabindex="-1">Settings</h1>')
       + '<p class="st-mode">' + (DEMO ? "Demo: saved in this browser only." : MODE === "live" ? "Saved in MOAB's records on this PC." : "Saved on this PC.") + "</p>"
-      + '<ul class="st-menu" role="list">' + MENUS.map((x) => '<li><a href="#/settings/' + x.id + '"' + (x.id === page.menu ? ' aria-current="page"' : "") + ">" + ic(x.icon) + '<span class="st-menu-l">' + esc(x.label) + "</span>" + ic("chevron", "chev") + "</a></li>").join("") + "</ul></nav>";
+      + '<ul class="st-menu" role="list">' + MENUS.map((x) => '<li><a href="#/settings/' + x.id + '"' + (x.id === page.menu ? ' aria-current="page"' : "") + ">" + ic(x.icon) + '<span class="st-menu-l">' + esc(x.label) + "</span>" + ic("chevron", "chev") + "</a></li>").join("")
+      + '<li><a href="#/guides">' + ic("note") + '<span class="st-menu-l">Setup guides</span>' + ic("chevron", "chev") + "</a></li></ul></nav>";
     const body = m ? '<div class="st-panel"><header class="st-head"><a class="back st-back" href="#/settings" aria-label="Back to Settings">' + ic("chevronLeft") + "<span>Settings</span></a>"
       + '<div class="st-head-row"><h1 class="st-h" tabindex="-1">' + esc(m.label) + '</h1><span class="st-saved" id="stSaved" role="status" aria-live="polite"></span></div>'
       + '<p class="st-sub">' + esc(m.sub) + "</p></header>" + '<div class="st-form">' + VIEWS[m.id](s) + "</div>"

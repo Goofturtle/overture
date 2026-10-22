@@ -595,6 +595,27 @@ class Research(Fresh):
         self.assertFalse(S.call_soon({"start": "2026-11-02T15:15:00-05:00"}, now))
         self.assertTrue(S.call_soon({}, now))  # no known start: don't hold it back
 
+    def test_a_guest_on_a_call_more_than_a_week_away_says_when_research_happens(self):
+        now = datetime(2026, 10, 21, 18, 0, tzinfo=timezone.utc)
+        m = {"name": "Marcus Bell", "named": True, "domain": "northwind-freight.com", "company": "Northwind Freight", "start": "2026-11-02T15:15:00-05:00"}
+        self.assertEqual(S.research_status("marcus.bell@northwind-freight.com", {}, m, now), ("later", S.LATER_NOTE))
+        soon = dict(m, start="2026-10-22T15:15:00-04:00")
+        self.assertNotEqual(S.research_status("marcus.bell@northwind-freight.com", {}, soon, now)[0], "later")
+        om = {"name": "Northwind Freight", "domain": "northwind-freight.com", "start": m["start"]}
+        self.assertEqual(S.org_research_status("northwind-freight.com", {}, om, now), ("later", S.ORG_LATER_NOTE))
+        # Far-off guests and companies aren't queued (that costs tokens) until the call is a week away.
+        meta = {"marcus.bell@northwind-freight.com": m}
+        self.assertFalse(S.queue_research(meta, S.load_records(), now))
+        self.assertFalse(S.queue_org_research(meta, S.load_records(), now))
+
+    def test_event_names_skip_titles_dates_and_read_html_descriptions(self):
+        self.assertEqual(S.name_from_event("shea@tks.world", {"title": "Meeting with Shea Kim CEO", "notes": ""}), "Shea Kim")
+        self.assertEqual(S.name_from_event("shea@tks.world", {"title": "Shea Thursday", "notes": "Shea October review"}), "")
+        self.assertEqual(S.name_from_event("shea@tks.world", {"title": "", "notes": "Call with Shea McDonald-Ray"}), "Shea McDonald-Ray")
+        e = ev("h1", "2026-10-22T19:15:00+00:00", 25, [SELF, att("shea@tks.world")], summary="Prototype review")
+        e["description"] = "<p>Her name is <b>Shea&nbsp;Tough</b>.</p>"
+        self.assertEqual([a["name"] for a in S._others(e, ME["email"])], ["Shea Tough"])
+
     def test_name_from_the_event_description(self):
         inv = {"title": "MOAB prototype review", "notes": "Call with Shea Kim from TKS to improve the prototype."}
         self.assertEqual(S.name_from_event("shea@tks.world", inv), "Shea Kim")

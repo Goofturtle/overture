@@ -470,17 +470,22 @@ def name_from_work_email(email):
     return m.group(1).capitalize() + " " + m.group(2).capitalize()
 
 
-NAME_STOP = {"will", "and", "from", "to", "the", "is", "at", "for", "on", "with", "about", "re", "call", "meeting", "review", "intro", "sync", "here", "there"}
+NAME_STOP = {"will", "and", "from", "to", "the", "is", "at", "for", "on", "with", "about", "re", "call", "meeting", "review", "intro", "sync", "here", "there",
+             "today", "tomorrow", "team", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "january", "february",
+             "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"}
+# A surname: a capital, then letters with at least one lowercase one ("Kim", "McDonald", "O'Brien"; not "CEO" or "TKS").
+SURNAME = r"([A-Z](?=[A-Za-z'’-]*[a-z])[A-Za-z'’-]{1,30})"
 
 
 def name_from_event(email, inv):
     """No name on the invite: find '<first name> Lastname' in the event's own title or description, where the first name is
-    the one in their email (shea@acme.com + 'Call with Shea Kim' -> 'Shea Kim'). The user wrote that text, so it's a safe source."""
+    the one in their email (shea@acme.com + 'Call with Shea Kim' -> 'Shea Kim'). The event's own text is on the user's calendar,
+    usually written by whoever set up the call; the page always says the name came from the event description."""
     first = re.split(r"[._\-+]", str(email or "").split("@")[0].lower())[0]
     if not re.fullmatch(r"[a-z]{2,30}", first) or first in ROLE_BOXES:
         return ""
     text = "\n".join([str(inv.get("title") or ""), str(inv.get("notes") or "")])[:4000]
-    for m in re.finditer(r"(?i:\b" + re.escape(first) + r")[ \t]+([A-Z][A-Za-z'’-]{1,30})(?:[ \t]+([A-Z][A-Za-z'’-]{1,30}))?", text):
+    for m in re.finditer(r"(?i:\b" + re.escape(first) + r")[ \t]+" + SURNAME + r"(?:[ \t]+" + SURNAME + r")?\b", text):
         words = [w for w in m.groups() if w]
         while words and words[-1].lower() in NAME_STOP:
             words.pop()
@@ -606,7 +611,7 @@ def _others(ev, me_email):
         if not email or a.get("self") or email == me_email or a.get("resource") or email.endswith("calendar.google.com"):
             continue
         # No name on the invite: the full name written in the event itself ("Call with Shea Tough") beats the email's first word.
-        named = str(a.get("displayName") or "").strip() or name_from_event(email, {"title": ev.get("summary"), "notes": ev.get("description")})
+        named = str(a.get("displayName") or "").strip() or name_from_event(email, {"title": ev.get("summary"), "notes": plain_text(ev.get("description"))})
         out.append({"name": named or name_from_email(email), "email": email})
     return out
 
@@ -743,7 +748,8 @@ def build_live(events, me, records, now=None, meta_out=None, crm=None):
 
     # Invitee research: what the background worker needs, the local facts it always shows, and a "New on the call" alert
     # for each guest it looked up in the last 30 days.
-    # The name research may send is only ever a real calendar display name (the latest one), never one made from the address.
+    # Names research may send: the latest calendar display name, else a full name in the event's own text, else a plain
+    # first.last work address (never the address itself; the page says where the name came from).
     last_met, display, display_at = {}, {}, {}
     for ev in events:
         start, end = _event_times(ev)
@@ -767,12 +773,14 @@ def build_live(events, me, records, now=None, meta_out=None, crm=None):
                 continue
             co = company_for_domain(d, records) or ""
             met = last_met.get(email)
+            # No name on the invite: the event's own text or a plain first.last work address still gives one, and the page says where it came from.
+            from_event = "" if display.get(email) else name_from_event(email, inv)
+            from_email = "" if display.get(email) or from_event else name_from_work_email(email)
             meta[email] = {
-                # No name on the invite: a plain first.last work address still gives one, and the page says where it came from.
-                "name": display.get(email, "") or name_from_event(email, inv) or name_from_work_email(email), "company": co, "domain": d, "callId": inv["id"],
+                "name": display.get(email, "") or from_event or from_email, "company": co, "domain": d, "callId": inv["id"],
                 "start": inv.get("start", ""),  # their soonest call: deep research waits until it is DEEP_DAYS_AHEAD days away
-                "named": bool(display.get(email) or name_from_event(email, inv) or name_from_work_email(email)),
-                "nameFrom": "invite" if display.get(email) else ("event" if name_from_event(email, inv) else ("email" if name_from_work_email(email) else "")),
+                "named": bool(display.get(email) or from_event or from_email),
+                "nameFrom": "invite" if display.get(email) else ("event" if from_event else ("email" if from_email else "")),
                 "internal": bool(mine and mine not in PERSONAL_DOMAINS and same_org(d, mine, records)),
                 "crm": bool((hs_people.get(email) or {}).get("title")),  # HubSpot has their title: no web lookup
                 "local": {"company": co, "adopter": bool(co and adopter_for(co)), "metBefore": bool(met),
@@ -1999,7 +2007,7 @@ def merge_org(domain, name, result, now=None):
         return dict(o)
 
 
-def org_research_status(domain, rec):
+def org_research_status(domain, rec, om=None, now=None):
     key = "co:" + domain
     with RQ_LOCK:
         if key in RQ["pending"] or key in RQ["running"]:
@@ -2011,13 +2019,16 @@ def org_research_status(domain, rec):
         return "done", ""
     if rec.get("lookup") == "unknown":
         return "unknown", searched_note(rec, "information about this company")
-    return "skipped", org_skip_reason(domain)
+    why = org_skip_reason(domain)
+    if not why and om and not call_soon(om, now or datetime.now(timezone.utc)):
+        return "later", ORG_LATER_NOTE
+    return "skipped", why
 
 
 def org_research_view(domain, om, rec):
     """What the page shows about one company's research (all text is escaped by the page)."""
     rec = rec if isinstance(rec, dict) else {}
-    status, note = org_research_status(domain, rec)
+    status, note = org_research_status(domain, rec, om)
     return {"status": status, "note": note, "domain": domain, "company": str((om or {}).get("name") or ""),
             "foundAt": str(rec.get("foundAt") or ""), "profile": profile_view(rec.get("profile"), "org")}
 
@@ -2291,6 +2302,15 @@ def run_search(req, budget=None, resumes=3):
     request times out within it (the SDK's per-request timeout, no slow retries) and a paused search isn't resumed after it.
     resumes: how many times a paused search (pause_turn) is resent at most. Raises ResearchError if Claude can't be reached or
     the answer was cut off."""
+    responses = []  # every reply, also of a lookup that fails partway: its tokens are paid for and logged all the same
+    try:
+        return _run_search(req, budget, resumes, responses)
+    finally:
+        if responses:
+            log_usage(responses)
+
+
+def _run_search(req, budget, resumes, responses):
     req = dict(req)
     messages = req.pop("messages")
     start = _time.monotonic()
@@ -2300,7 +2320,7 @@ def run_search(req, budget=None, resumes=3):
         def within(seconds):  # a client whose requests time out within what is left of the budget
             return base.with_options(timeout=float(seconds), max_retries=0) if budget and hasattr(base, "with_options") else base
         resp = within(budget).beta.messages.create(messages=messages, **req)
-        responses = [resp]
+        responses.append(resp)
         for _ in range(resumes):  # a long server-side search can pause; resend to let it finish
             if _get(resp, "stop_reason") != "pause_turn":
                 break
@@ -2348,7 +2368,6 @@ def run_search(req, budget=None, resumes=3):
                     t = _get(c, "cited_text")
                     page(u)["cited"] += [t[:2000]] if isinstance(t, str) and t.strip() else []
     text = "".join(_get(b, "text") or "" for b in _get(resp, "content") or [] if _get(b, "type") == "text")
-    log_usage(responses)
     return stop, text, seen
 
 
@@ -2374,9 +2393,14 @@ def log_usage(responses):
         USAGE["lookups"] += 1
         USAGE["input"] += n["input"] + n["cached"] + n["written"]
         USAGE["output"] += n["output"]
-    print("[research] tokens in " + str(n["input"] + n["cached"] + n["written"]) + " (full price " + str(n["input"]) + ", cache reads "
-          + str(n["cached"]) + ", cache writes " + str(n["written"]) + "), out " + str(n["output"])
-          + "; searches " + str(n["searches"]) + ", pages opened " + str(n["fetches"]) + "; resends " + str(len(responses) - 1), flush=True)
+        total = dict(USAGE)
+    try:  # a closed console must never throw away a lookup that is already paid for
+        print("[research] tokens in " + str(n["input"] + n["cached"] + n["written"]) + " (full price " + str(n["input"]) + ", cache reads "
+              + str(n["cached"]) + ", cache writes " + str(n["written"]) + "), out " + str(n["output"])
+              + "; searches " + str(n["searches"]) + ", pages opened " + str(n["fetches"]) + "; resends " + str(len(responses) - 1)
+              + " | since start: " + str(total["lookups"]) + " lookups, in " + str(total["input"]) + ", out " + str(total["output"]), flush=True)
+    except (OSError, ValueError):
+        pass
 
 
 def page_day(v):
@@ -2607,7 +2631,11 @@ def profile_for_ai(p):
     return out
 
 
-def research_status(email, rec, m):
+LATER_NOTE = "MOAB researches them in depth a week before the call."
+ORG_LATER_NOTE = "MOAB researches this company in depth a week before the call."
+
+
+def research_status(email, rec, m, now=None):
     if m.get("crm"):
         return "skipped", ""  # the title came from HubSpot
     with RQ_LOCK:
@@ -2621,6 +2649,8 @@ def research_status(email, rec, m):
     if rec.get("lookup") == "unknown":
         return "unknown", searched_note(rec, "work information about them")
     why = skip_reason(email, m, rec).strip()
+    if not why and not call_soon(m, now or datetime.now(timezone.utc)):
+        return "later", LATER_NOTE  # Look up now still works (request_research doesn't wait)
     return ("notfound" if why.startswith("Can't find") else "skipped"), why
 
 

@@ -106,7 +106,7 @@
       return '<p class="pf-state" role="status">' + ic("search") + "<span><strong>Researching…</strong> MOAB is reading public sources about "
         + esc(org ? name : first(name) + "'s work") + ". This fills in as soon as it is done.</span></p>";
     }
-    if (["unknown", "error", "skipped", "notfound", "done"].includes(status)) {
+    if (["unknown", "error", "skipped", "notfound", "done", "later"].includes(status)) {
       const text = note || (status === "done" || status === "unknown" ? "MOAB searched the web and found no public work information about " + (org ? "this company" : "them") + "." : "");
       return text ? '<p class="pf-state">' + ic("circleAlert") + "<span>" + esc(text) + "</span></p>" : "";
     }
@@ -214,7 +214,7 @@
     const rel = RELATION[r.relationship];
     const role = [w.title ? esc(w.title) : "", w.company ? ctl(opts, "company", w.company, esc(w.companyLabel)) : ""].filter(Boolean).join('<span class="pf-at"> at </span>');
     const actions = (w.calls.length ? ctl(opts, "call", w.calls[0].id, ic("arrowRight") + "Open brief", "btn secondary sm") : "")
-      + (opts.canAgain && ["done", "unknown", "error"].includes(info.status) ? '<button type="button" class="btn ghost sm" data-rs-again="' + esc(email) + '">' + ic("rotate") + "Look up again</button>" : "");
+      + (opts.canAgain && ["done", "unknown", "error", "later"].includes(info.status) ? '<button type="button" class="btn ghost sm" data-rs-again="' + esc(email) + '">' + ic("rotate") + (info.status === "later" ? "Look up now" : "Look up again") + "</button>" : "");
     let h = '<div class="topbar"><div class="topbar-inner"><nav class="co-crumbs" aria-label="Breadcrumb"><a href="#/map">People</a><span class="co-crumb-sep" aria-hidden="true">/</span>'
       + '<span class="co-crumb-here" aria-current="page">' + esc(w.name) + "</span></nav></div></div>";
     h += '<div class="pf-page"><header class="pf-head">' + avatar({ name: w.name, email }, "xl")
