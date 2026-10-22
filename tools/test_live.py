@@ -3530,17 +3530,17 @@ class SettingsRoutes(ServerBase):
         self.assertEqual(json.loads(txt)["settings"], S.default_settings())
         self.assertEqual(self.req("GET", "/api/settings", headers={"Sec-Fetch-Site": "cross-site"})[0], 403)
         self.assertEqual(self.req("GET", "/api/settings", headers={"Host": "evil.example"})[0], 403)
-        body = {"appearance": {"theme": "dark"}}
+        body = {"appearance": {"theme": "light"}}
         self.assertEqual(self.req("PUT", "/api/settings", body)[0], 403)                                       # no X-MOAB
         self.assertEqual(self.req("PUT", "/api/settings", body, {"X-MOAB": "1", "Origin": "https://evil.example"})[0], 403)
         self.assertEqual(self.req("PUT", "/api/settings", body, dict(ok, **{"Content-Type": "text/plain"}))[0], 403)
         self.assertEqual(self.req("PUT", "/api/settings", {"appearance": {"theme": "neon"}}, ok)[0], 400)
         self.assertEqual(self.req("PUT", "/api/settings", {"followup": {"templates": {"intro": {"body": "x" * 70_000}}}}, ok)[0], 413)
-        self.assertEqual(S.effective_settings(S.load_records())["appearance"]["theme"], "light")  # nothing saved yet
+        self.assertEqual(S.effective_settings(S.load_records())["appearance"]["theme"], "dark")  # nothing saved yet: dark is the default
         st, txt, _ = self.req("PUT", "/api/settings", body, ok)
         self.assertEqual(st, 200, txt)
-        self.assertEqual(json.loads(txt)["settings"]["appearance"]["theme"], "dark")
-        self.assertEqual(json.loads(self.req("GET", "/api/settings")[1])["settings"]["appearance"]["theme"], "dark")
+        self.assertEqual(json.loads(txt)["settings"]["appearance"]["theme"], "light")
+        self.assertEqual(json.loads(self.req("GET", "/api/settings")[1])["settings"]["appearance"]["theme"], "light")
         self.assertEqual(self.req("HEAD", "/api/settings")[0], 404)
 
     def test_web_research_off_refuses_a_lookup(self):

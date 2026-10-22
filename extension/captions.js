@@ -8,7 +8,8 @@
   const UI_WORDS = new Set(["captions", "live captions", "english", "turn off captions", "turn on captions", "caption settings"]);
   const ICON = /^[a-z_]+$/;          // Material icon ligatures in Meet's text (arrow_downward, more_vert)
   const recent = [];                 // lines already sent, so a line Meet shows again isn't sent twice
-  let lastLine = "", stable = 0, speaker = "", emitted = "", inCall = false;
+  const all = [];                    // the whole call's lines, sent once more when you leave (the side panel may have reloaded)
+  let lastLine = "", stable = 0, speaker = "", emitted = "", inCall = false, missed = 0;
 
   function captionsBox() {
     return document.querySelector('[role="region"][aria-label*="aption" i]') // "Captions"
@@ -33,12 +34,17 @@
     if (recent.length > 300) recent.shift();
     emitted = line;
     out.push((speaker ? speaker + ": " : "") + words);
+    all.push(out[out.length - 1]);
+    if (all.length > 20000) all.shift();
   }
 
   function tick() {
     const leave = document.querySelector('[aria-label*="Leave call" i]');
-    if (inCall && !leave) send("moab-call-ended"); // you left the call: MOAB reads the whole transcript for After the call
-    inCall = !!leave;
+    if (leave) { inCall = true; missed = 0; }
+    else if (inCall && ++missed >= 2) { // gone for 2 checks in a row (not a toolbar redraw): you left the call
+      inCall = false;
+      send("moab-call-ended", { lines: all.slice() }); // MOAB reads the whole transcript for After the call
+    }
     const box = captionsBox();
     if (!box) return;
     const lines = lineList(box), out = [];

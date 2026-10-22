@@ -48,7 +48,10 @@ async function refresh() {
   off.hidden = up;
   frame.hidden = !up;
   if (!up) { shown = ""; return; }
-  const src = panelUrl(meetingParams(await activeTabUrl()));
+  const p = meetingParams(await activeTabUrl());
+  // Another tab that isn't a meeting (presenting, looking something up): keep the panel as it is, with the call's captions so far.
+  if (shown && !p.meet && !p.zoom) return;
+  const src = panelUrl(p);
   if (src !== shown) { shown = src; frame.src = src; } // a new meeting in this tab: the panel opens its call
 }
 
@@ -60,7 +63,8 @@ if (chrome.runtime && chrome.runtime.onMessage) chrome.runtime.onMessage.addList
   if (msg.type === "moab-captions" && Array.isArray(msg.lines)) {
     frame.contentWindow.postMessage({ type: "moab-captions", lines: msg.lines.slice(0, 50).map((l) => String(l).slice(0, 600)) }, MOAB);
   } else if (msg.type === "moab-call-ended") {
-    frame.contentWindow.postMessage({ type: "moab-call-ended" }, MOAB);
+    const lines = Array.isArray(msg.lines) ? msg.lines.slice(-20000).map((l) => String(l).slice(0, 600)) : [];
+    frame.contentWindow.postMessage({ type: "moab-call-ended", lines }, MOAB);
   }
 });
 

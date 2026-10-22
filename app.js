@@ -276,7 +276,7 @@
 
   function beforeBox() {
     const items = [];
-    D.invites.forEach((inv) => {
+    D.invites.filter((inv) => !inv.ended).forEach((inv) => {
       const r = runs[inv.id];
       if (r && r.ctx && r.ctx.done) r.ctx.todos.forEach((t) => items.push({ inv, t, done: r.ticks.has(t.text) }));
     });
@@ -340,11 +340,11 @@
   }
 
   function renderHome() {
-    const [next, ...later] = D.invites;
+    const [next, ...later] = D.invites.filter((i) => !i.ended); // calls that just ended stay listed (After the call), not here
     const sec = $('[data-view="home"]');
     if (!next) return renderHomeEmpty(sec);
     const keep = document.activeElement && sec.contains(document.activeElement) ? document.activeElement.dataset.todo || document.activeElement.getAttribute("href") : null;
-    const ready = D.invites.filter((i) => prepState(i.id) === "done").length, unread = unreadCount();
+    const ready = D.invites.filter((i) => !i.ended && prepState(i.id) === "done").length, unread = unreadCount();
     // Shopify, Tana and Perplexity put one big ask/search box under the greeting, with quick actions under it (Mobbin).
     const bot = ($(".brand .logo") || { outerHTML: "" }).outerHTML.replace(/moabCut/g, "moabCutAsk");
     const chip = (attrs, label, n) => '<li><button type="button" class="home-chip" ' + attrs + ">" + label + (n != null ? '<b>' + n + "</b>" : "") + "</button></li>";
@@ -354,7 +354,7 @@
       + '<div class="home-ask search-field" id="homeAsk" role="search">' + bot + "<kbd>/</kbd></div>"
       + '<ul class="home-chips" role="list" aria-label="Quick actions">'
       + chip('data-go="#/calls/' + next.id + '"', nextReady ? "Open the " + esc(next.company) + " brief" : "Prep " + esc(next.company), null)
-      + chip('data-go="#/calls"', DEMO ? "Calls this week" : "Upcoming calls", D.invites.length)
+      + chip('data-go="#/calls"', DEMO ? "Calls this week" : "Upcoming calls", D.invites.filter((i) => !i.ended).length)
       + chip('data-go="#/alerts"', "New alerts", unread)
       + chip('data-check="1"', "Check a company", null) + "</ul></header></div>"
       + '<div class="home-grid">' + heroCard(next)
@@ -403,7 +403,7 @@
         avatarStack(later[0], "xs") + '<span class="hw-note">' + plural(later[0].attendees.length, "person", "people") + " on the call</span>") : "")
       + card("hw-d", "#/calls", label("tone-green", "Your week") + '<span class="hw-meta">' + plural(total, "call") + "</span>",
         ring + text(ready ? plural(ready, "brief") + " ready" : "Nothing prepped yet", ready === total ? "You're set for the week" : plural(total - ready, "call") + " left to prep"),
-        '<span class="hw-squares">' + D.invites.map((i) => '<span style="background:' + C.solid(i.company) + '">' + esc(i.company.charAt(0)) + "</span>").join("") + '</span><span class="hw-note">' + D.invites.map((i) => esc(splitWhen(i.when).day.slice(0, 3))).join(" · ") + "</span>")
+        '<span class="hw-squares">' + D.invites.filter((i) => !i.ended).map((i) => '<span style="background:' + C.solid(i.company) + '">' + esc(i.company.charAt(0)) + "</span>").join("") + '</span><span class="hw-note">' + D.invites.map((i) => esc(splitWhen(i.when).day.slice(0, 3))).join(" · ") + "</span>")
       + "</div>";
   }
   // The same hero before any calls exist: what MOAB already knows from public data, and the one step left.
@@ -2326,7 +2326,7 @@
       links.push({ label: "Open " + n, href: "#/companies/" + slug(n) });
     });
     if (!lines.length && /\bnext\b|\bupcoming\b|\btoday\b|\btomorrow\b/.test(ql)) {
-      const inv = D.invites[0];
+      const inv = D.invites.find((i) => !i.ended) || D.invites[0];
       if (inv) { lines.push("Your next call is " + inv.company + ", " + longDay(inv) + " at " + splitWhen(inv.when).start + ", with " + names(inv) + "."); links.push({ label: "Open the call", href: "#/calls/" + inv.id }); }
       else lines.push(MODE === "connect" ? "No calendar is connected yet, so MOAB has no calls to look at." : "You have no calls with outside guests in the next 14 days.");
     }

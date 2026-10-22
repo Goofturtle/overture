@@ -1192,7 +1192,7 @@ def default_settings():
         "alerts": {"signals": {s: True for s in ALERT_SIGNALS}, "security": "all", "delivery": "instant", "quiet": {"on": False, "from": "18:00", "to": "08:00"}},
         "research": {"web": True, "hubspot": True, "gong": True, "gongTranscripts": False, "gongInAI": False, "transcriptsInAI": False,
                      "aiShare": "notes", "blocked": [], "meetily": False, "granola": False},
-        "appearance": {"theme": "light", "accent": "indigo", "density": "comfortable"},
+        "appearance": {"theme": "dark", "accent": "green", "density": "comfortable"},  # Spotify-style dark + green by default
     }
 
 
@@ -1422,7 +1422,9 @@ def stage_alerts(companies, seen, now, invites=()):
     """HubSpot stage changes: compare each HubSpot-set company status with the one seen last time. Returns (alerts, seen).
     A change stays an alert for 7 days. The first time a company is seen it is only remembered."""
     seen = {k: dict(v) for k, v in (seen or {}).items() if isinstance(v, dict)}
-    calls = {i.get("company"): i.get("id") for i in invites}
+    calls = {}
+    for i in invites:  # a company's upcoming call, not one that just ended (upcoming calls come first)
+        calls.setdefault(i.get("company"), i.get("id"))
     out = []
     for name, c in (companies or {}).items():
         if not isinstance(c, dict) or (c.get("src") or {}).get("status") != "HubSpot":
@@ -1575,7 +1577,7 @@ def ask_context(question, call_id, live, records):
             "company": company_facts((live.get("companies") or {}).get(call["company"])),
             "companyResearch": profile_for_ai(((live.get("companies") or {}).get(call["company"]) or {}).get("profile")),
         },
-        "upcomingCalls": [{"title": i["title"], "company": i["company"], "when": i["when"], "people": [a["name"] for a in i["attendees"]]} for i in invites[:25]],
+        "upcomingCalls": [{"title": i["title"], "company": i["company"], "when": i["when"], "ended": bool(i.get("ended")), "people": [a["name"] for a in i["attendees"]]} for i in invites[:25]],
         "alerts": [w["title"] + ": " + w["text"] for w in live.get("watch", [])][:20],
         "moabRecords": {
             "companies": dict(list((records.get("companies") or {}).items())[:60]),
@@ -5675,7 +5677,11 @@ def mentions_live(body, now=None):
             return 404, {"error": "That call isn't in your calendar."}
 
         def read(s):
-            return find_all([{"speaker": "Your note", "time": "", "text": s}], ctx, None, final) if s.strip() else ([], [])
+            if not s.strip():
+                return [], []
+            # Google Meet's captions come as "Name: words" lines: keep who said what (your own note is one block, from you)
+            lines = parse_transcript(s) if src == "captions" else [{"speaker": "Your note", "time": "", "text": s}]
+            return find_all(lines, ctx, None, final) if lines else ([], [])
         found, orgs = read(ready)
         present = {x["key"] for x in found + orgs}
         if mine and ready != full:  # what the whole note says now, so a sentence still being typed keeps what it found on a pause

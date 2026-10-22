@@ -19,8 +19,10 @@
   const codeKey = (c) => String(c || "").toLowerCase().replace(/[^a-z0-9]/g, "");
   function extMatch() {
     const meet = codeKey(qs.get("meet")), zoom = String(qs.get("zoom") || "").replace(/\D/g, "");
-    if (meet) return D.invites.find((i) => codeKey(i.meetingCode) === meet) || null;
-    if (zoom) return D.invites.find((i) => String(i.zoomId || "") === zoom) || null;
+    // a recurring meeting reuses its code: take the occurrence closest to now (today's, even once it runs late)
+    const nearest = (list) => list.sort((a, b) => Math.abs(Date.parse(a.start) - Date.now()) - Math.abs(Date.parse(b.start) - Date.now()))[0] || null;
+    if (meet) return nearest(D.invites.filter((i) => codeKey(i.meetingCode) === meet));
+    if (zoom) return nearest(D.invites.filter((i) => String(i.zoomId || "") === zoom));
     return null;
   }
   document.documentElement.dataset.host = HOST;
@@ -39,7 +41,7 @@
   const state = { callId: window.C.inviteById(qs.get("call")) ? qs.get("call") : D.invites.length ? D.invites[0].id : null, ctx: null, tab: "brief", inCall: null, startedAt: Date.now(), hostNote: "", ticks: new Set(), open: null, view: null };
   if (HOST === "ext") {
     const m = extMatch();
-    if (m) state.callId = m.id;
+    if (m) state.callId = state.captionsCall = m.id; // captions are only read for a call this meeting matched, or one you pick
     state.hostNote = m ? "Matched this " + HOST_NAME + " call to " + m.company + "."
       : (qs.get("meet") || qs.get("zoom")) ? "Pick the call below. This meeting isn't on your calendar." : "Open a Google Meet or Zoom web call in this tab, or pick a call below.";
   }
@@ -355,7 +357,8 @@
   async function sendLive(text, final, pause, st) {
     st = st || live;
     if (!LIVE_MODE || !state.callId || text.length > 8000 || !autoLookup()) return; // Settings > Mentions: automatic look-up can be off
-    if (st.busy) { st.next = [text, final, pause]; return; }
+    // While one send runs: a finishing send waits in its own list and goes first, so a later send can never replace it.
+    if (st.busy) { if (final) (st.fins = st.fins || []).push(text); else st.next = [text, final, pause]; return; }
     if (!st.seg) { st.seg = newSeg(); st.sent = ""; }
     let off = 0;
     while (off < st.sent.length && off < text.length && st.sent[off] === text[off]) off++;
@@ -374,8 +377,11 @@
     } catch (e) {
       // the server lost the note (it restarted): send it all again, once
       if (e.message === "resend" && off) { st.seg = ""; st.sent = ""; st.paused = ""; if (!st.next) st.next = [text, final, pause]; }
+      // a finishing send that failed still ends its part here: the next text starts a new part, never overwriting the old one
+      else if (final && st.seg === seg) { st.seg = ""; st.sent = ""; st.paused = ""; }
     }
     st.busy = false;
+    if (st.fins && st.fins.length) { sendLive(st.fins.shift(), true, false, st); return; }
     if (st.next) { const [t, f, p] = st.next; st.next = null; sendLive(t, f, p, st); }
   }
 
@@ -389,30 +395,38 @@
     // Only the extension's side panel frames this page (the server's frame-ancestors says so), and it is our parent.
     if (e.source !== window.parent || !/^chrome-extension:\/\//.test(e.origin) || !e.data || !LIVE_MODE) return;
     if (e.data.type === "moab-captions" && Array.isArray(e.data.lines)) captionLines(e.data.lines);
-    if (e.data.type === "moab-call-ended") captionsDone("left");
+    if (e.data.type === "moab-call-ended") captionsDone("left", e.data.lines);
   });
+  // Captions count only for the call this meeting matched, or one you picked: never for whichever call the list shows first.
+  const captionsOn = () => !!state.callId && state.captionsCall === state.callId;
   function captionLines(lines) {
     const add = lines.filter((l) => typeof l === "string" && l.trim()).map((l) => l.trim().slice(0, 600)).slice(0, 50);
-    if (!add.length || !state.callId) return;
+    if (!add.length || !captionsOn()) return;
     const before = ccText();
     if (before && before.length + add.join("\n").length > 6000) { sendLive(before, true, false, cc); cc.segStart = cc.lines.length; } // a new part every ~6,000 letters
     cc.lines.push(...add);
-    if (cc.lines.length > 20000) cc.lines.splice(0, cc.lines.length - 20000);
+    if (cc.lines.length > 20000) { const cut = cc.lines.length - 20000; cc.lines.splice(0, cut); cc.segStart = Math.max(0, cc.segStart - cut); }
     cc.lastAt = Date.now();
     cc.posted = false;
     sendLive(ccText(), false, false, cc);
     clearTimeout(cc.idle);
     cc.idle = setTimeout(() => sendLive(ccText(), false, true, cc), 1500); // a pause reads the last sentence too
-    refreshListen();
+    const num = $(".p-listen .num");
+    if (num && $(".p-listen.on")) num.textContent = plural(cc.lines.length, "line"); // just the count: keyboard focus on the button stays put
+    else refreshListen();
   }
-  // The call is over: read the whole caption transcript once, the same way an uploaded transcript is read.
-  async function captionsDone(why) {
-    if (cc.posted || !cc.lines.length || !state.callId || !LIVE_MODE) return;
+  // The call is over: read the whole caption transcript once, the same way an uploaded transcript is read. The Meet tab's own
+  // copy (sent when you leave) wins when it's longer: this panel may have reloaded during the call.
+  async function captionsDone(why, all) {
+    const tab = Array.isArray(all) ? all.filter((l) => typeof l === "string" && l.trim()).map((l) => l.trim().slice(0, 600)) : [];
+    const lines = tab.length > cc.lines.length ? tab : cc.lines;
+    if (cc.posted || !lines.length || !captionsOn() || !LIVE_MODE) return;
     cc.posted = true;
+    clearTimeout(cc.idle);
     const id = state.callId;
-    sendLive(ccText(), true, false, cc);
+    if (cc.lines.length) sendLive(ccText(), true, false, cc);
     try {
-      const j = await window.C.postJson("/api/mentions", { callId: id, text: cc.lines.join("\n").slice(0, 900000), source: "captions" }, 60000);
+      const j = await window.C.postJson("/api/mentions", { callId: id, text: lines.join("\n").slice(0, 900000), source: "captions" }, 60000);
       applyMentions(id, j);
       announce((why === "left" ? "Call ended. " : "") + "MOAB read the whole caption transcript for After the call.");
     } catch (e) { cc.posted = false; announce("Couldn't read the call's captions: " + e.message); }
@@ -425,6 +439,7 @@
   }, 30000);
   function captionsLine() {
     if (!LIVE_MODE) return "";
+    if (qs.get("meet") && !captionsOn()) return '<p class="p-listen"><span class="live-dot off" aria-hidden="true"></span>Pick this meeting\'s call above so MOAB can read its captions.</p>';
     if (!cc.lines.length) {
       return qs.get("meet") ? '<p class="p-listen"><span class="live-dot off" aria-hidden="true"></span>Turn on captions (CC) in Meet and MOAB finds who and what is mentioned. Let everyone know you\'re taking AI notes.</p>' : "";
     }
@@ -561,7 +576,7 @@
     if (e.target.id === "callPick") {
       clearTimeout(live.timer); clearTimeout(live.idle);
       if (live.seg && (live.draft.trim() || live.sent)) sendLive(live.draft.trim() ? live.draft : live.sent, true, false); // the old call's note is done: the server drops its text now
-      state.callId = e.target.value; state.open = null; state.view = null;
+      state.callId = state.captionsCall = e.target.value; state.open = null; state.view = null;
       Object.assign(live, { seg: "", sent: "", next: null, paused: "", draft: "" });
       await prepare(); await loadMentions(); render(); announce("Showing " + window.C.inviteById(state.callId).company + ".");
       if (mt.st && mt.st.recording) meetilyPick(); // the call picked here is the one Meetily is recording
