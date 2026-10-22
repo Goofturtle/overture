@@ -4311,7 +4311,7 @@ class ExtensionManifest(unittest.TestCase):
     def test_permissions_are_minimal_and_hosts_limited(self):
         m = self.manifest()
         self.assertEqual(m["manifest_version"], 3)
-        self.assertEqual(m["permissions"], ["sidePanel"])
+        self.assertEqual(m["permissions"], ["sidePanel", "scripting"])  # scripting: add the caption reader to Meet tabs already open after a reload
         self.assertEqual(m["host_permissions"], ["https://meet.google.com/*", "https://*.zoom.us/*", "http://localhost:3576/*"])
         # One content script, on Google Meet only: it reads Meet's captions (when CC is on) for the side panel.
         self.assertEqual(m["content_scripts"], [{"matches": ["https://meet.google.com/*"], "js": ["captions.js"], "run_at": "document_idle"}])

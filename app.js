@@ -176,7 +176,14 @@
     let title = TITLES[r.view] || "";
     if (r.view === "home") renderHome();
     else if (r.view === "calls") renderCallsPage();
-    else if (r.view === "call") { const run = runs[r.callId]; if (run) run.tab = r.tab === "after" && run.ctx && run.ctx.done ? "after" : "brief"; renderCallView(); title = inviteById(r.callId).company; }
+    else if (r.view === "call") {
+      const run = runs[r.callId], inv = inviteById(r.callId);
+      // #/calls/<id>/after, or a call that already ended: After the call (running the agent first when it hasn't run)
+      const wantAfter = r.tab === "after" || (inv.ended && !(run && run.ctx && run.ctx.done));
+      if (wantAfter && !(run && run.ctx && run.ctx.done)) openAfter(r.callId);
+      if (run) run.tab = r.tab === "after" && run.ctx && run.ctx.done ? "after" : "brief";
+      renderCallView(); title = inv.company;
+    }
     else if (r.view === "alerts") { renderAlerts(); const a = alerts().find((x) => x.id === app.alertId); if (a) title = a.title; }
     else if (r.view === "companies") renderCompanies();
     else if (r.view === "company") { const name = companyBySlug(app.slug); if (!name) { go("#/companies", true); return; } renderCompany(name); title = name; }
@@ -632,12 +639,21 @@
     }).join("") + "</ol>";
   }
 
+  // After the call needs the agent's brief (who was on the call, for suggested updates). Asking for After the call on a call the
+  // agent hasn't run for runs it first and lands there; a call that already ended opens there too.
+  const afterNext = new Set();
+  function openAfter(id) {
+    if (runs[id] && runs[id].ctx && runs[id].ctx.done) return false;
+    afterNext.add(id);
+    if (runningId !== id) runAgent(id);
+    return true;
+  }
   async function runAgent(id) {
     if (runningId) return;
     runningId = id;
     const inv = inviteById(id);
     const prev = runs[id];
-    const run = runs[id] = { ctx: null, states: {}, ticks: prev ? prev.ticks : new Set(), tab: "brief",
+    const run = runs[id] = { ctx: null, states: {}, ticks: prev ? prev.ticks : new Set(), tab: afterNext.delete(id) ? "after" : "brief",
       notes: prev ? prev.notes : inv.afterNotes || "", changes: prev ? prev.changes : null, claude: null, error: null };
     renderNav();
     patchPrep(id);
@@ -1488,7 +1504,7 @@
     const done = !!(run && run.ctx && run.ctx.done && !run.error && runningId !== id);
     $("#backLink").innerHTML = ic("chevronLeft") + "<span>Calls</span>";
     $("#backLink").setAttribute("aria-label", "Back to calls");
-    $("#callTabs").hidden = !done;
+    $("#callTabs").hidden = runningId === id; // always there: After the call works before the agent has run (it runs it)
     renderAfterCount(id);
     $("#runAgain").hidden = !done;
     $("#runAgain").disabled = !!runningId;
@@ -1505,6 +1521,7 @@
   }
   function setTab(tab) {
     const run = runs[app.callId];
+    if (tab === "after" && openAfter(app.callId)) return; // runs the agent first, then shows After the call
     if (!run || !run.ctx || !run.ctx.done) return;
     run.tab = tab;
     history.replaceState(null, "", "#/calls/" + app.callId + (tab === "after" ? "/after" : ""));

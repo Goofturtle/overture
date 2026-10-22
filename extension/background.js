@@ -23,4 +23,10 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
 });
 chrome.runtime.onInstalled.addListener(async () => {
   try { (await chrome.tabs.query({})).forEach((t) => setFor(t.id, t.url)); } catch (e) { /* nothing to do */ }
+  // Installed or reloaded mid-call: Chrome only adds captions.js to Meet tabs that load from now on, so add it to the Meet tabs
+  // already open too (the copy from before the reload switches itself off).
+  try {
+    const meets = (await chrome.tabs.query({})).filter((t) => /^https:\/\/meet\.google\.com\//.test(t.url || ""));
+    await Promise.all(meets.map((t) => chrome.scripting.executeScript({ target: { tabId: t.id }, files: ["captions.js"] }).catch(() => {})));
+  } catch (e) { /* no Meet tab open */ }
 });

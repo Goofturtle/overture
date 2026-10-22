@@ -358,7 +358,7 @@
     st = st || live;
     if (!LIVE_MODE || !state.callId || text.length > 8000 || !autoLookup()) return; // Settings > Mentions: automatic look-up can be off
     // While one send runs: a finishing send waits in its own list and goes first, so a later send can never replace it.
-    if (st.busy) { if (final) (st.fins = st.fins || []).push(text); else st.next = [text, final, pause]; return; }
+    if (st.busy) { if (final) { (st.fins = st.fins || []).push(text); st.next = null; } else st.next = [text, final, pause]; return; }
     if (!st.seg) { st.seg = newSeg(); st.sent = ""; }
     let off = 0;
     while (off < st.sent.length && off < text.length && st.sent[off] === text[off]) off++;
@@ -396,6 +396,11 @@
     if (e.source !== window.parent || !/^chrome-extension:\/\//.test(e.origin) || !e.data || !LIVE_MODE) return;
     if (e.data.type === "moab-captions" && Array.isArray(e.data.lines)) captionLines(e.data.lines);
     if (e.data.type === "moab-call-ended") captionsDone("left", e.data.lines);
+    if (e.data.type === "moab-captions-status") { // the Meet tab's reader checks in every 3 s: running, and whether CC is on
+      const was = cc.box;
+      cc.box = !!e.data.box; cc.seenAt = Date.now();
+      if (was !== cc.box) refreshListen();
+    }
   });
   // Captions count only for the call this meeting matched, or one you picked: never for whichever call the list shows first.
   const captionsOn = () => !!state.callId && state.captionsCall === state.callId;
@@ -441,7 +446,11 @@
     if (!LIVE_MODE) return "";
     if (qs.get("meet") && !captionsOn()) return '<p class="p-listen"><span class="live-dot off" aria-hidden="true"></span>Pick this meeting\'s call above so MOAB can read its captions.</p>';
     if (!cc.lines.length) {
-      return qs.get("meet") ? '<p class="p-listen"><span class="live-dot off" aria-hidden="true"></span>Turn on captions (CC) in Meet and MOAB finds who and what is mentioned. Let everyone know you\'re taking AI notes.</p>' : "";
+      if (!qs.get("meet")) return "";
+      const off = (t) => '<p class="p-listen"><span class="live-dot off" aria-hidden="true"></span>' + t + "</p>";
+      if (!cc.seenAt) return off("MOAB's caption reader isn't running in this Meet tab yet. Reload the Meet tab once (or the MOAB extension), then turn on CC.");
+      if (!cc.box) return off("Turn on captions (CC) in Meet and MOAB finds who and what is mentioned. Let everyone know you're taking AI notes.");
+      return '<p class="p-listen on"><span class="live-dot" aria-hidden="true"></span>Captions are on. Waiting for someone to speak…</p>';
     }
     return '<p class="p-listen on"><span class="live-dot" aria-hidden="true"></span>Reading Meet captions · <span class="num">' + esc(plural(cc.lines.length, "line")) + "</span>"
       + (cc.posted ? " · read for After the call" : ' · <button type="button" class="link-btn" data-cc-done>Call over? Find everyone mentioned</button>') + "</p>";
@@ -577,7 +586,7 @@
       clearTimeout(live.timer); clearTimeout(live.idle);
       if (live.seg && (live.draft.trim() || live.sent)) sendLive(live.draft.trim() ? live.draft : live.sent, true, false); // the old call's note is done: the server drops its text now
       state.callId = state.captionsCall = e.target.value; state.open = null; state.view = null;
-      Object.assign(live, { seg: "", sent: "", next: null, paused: "", draft: "" });
+      Object.assign(live, { seg: "", sent: "", next: null, fins: [], paused: "", draft: "" }); // nothing queued for the old call may go to the new one
       await prepare(); await loadMentions(); render(); announce("Showing " + window.C.inviteById(state.callId).company + ".");
       if (mt.st && mt.st.recording) meetilyPick(); // the call picked here is the one Meetily is recording
       return;

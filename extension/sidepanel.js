@@ -62,6 +62,8 @@ if (chrome.runtime && chrome.runtime.onMessage) chrome.runtime.onMessage.addList
   if (!meet || new URL(shown).searchParams.get("meet") !== meet) return;
   if (msg.type === "moab-captions" && Array.isArray(msg.lines)) {
     frame.contentWindow.postMessage({ type: "moab-captions", lines: msg.lines.slice(0, 50).map((l) => String(l).slice(0, 600)) }, MOAB);
+  } else if (msg.type === "moab-captions-status") {
+    frame.contentWindow.postMessage({ type: "moab-captions-status", box: !!msg.box }, MOAB);
   } else if (msg.type === "moab-call-ended") {
     const lines = Array.isArray(msg.lines) ? msg.lines.slice(-20000).map((l) => String(l).slice(0, 600)) : [];
     frame.contentWindow.postMessage({ type: "moab-call-ended", lines }, MOAB);
