@@ -500,7 +500,12 @@
   // [2] in an answer becomes the same numbered source chip the profile uses.
   function answerHtml(text, sources) {
     const list = (sources || []).map((s) => { const href = C.safeHref(s.url); return href ? { href, label: s.label || "", host: new URL(href).hostname.replace(/^www\./, "") } : null; });
-    return esc(text).replace(/\[(\d{1,2})\]/g, (m, d) => { const i = +d - 1; return list[i] ? cites([i], list) : ""; });
+    // [2], [1, 3] or [1-3]: one chip per source number
+    return esc(text).replace(/\[(\d{1,2}(?:\s*[,–-]\s*\d{1,2})*)\]/g, (m, d) => {
+      const nums = [];
+      d.split(/\s*,\s*/).forEach((part) => { const r = part.split(/\s*[–-]\s*/).map(Number); for (let n = r[0]; n <= (r[1] || r[0]) && nums.length < 9; n++) nums.push(n - 1); });
+      return cites(nums.filter((i) => list[i]), list);
+    });
   }
   document.addEventListener("submit", async (e) => {
     const f = e.target.closest("[data-ask-person]");
@@ -509,10 +514,12 @@
     const input = f.querySelector("input"), q = input.value.trim(), out = f.parentElement.querySelector(".pf-ask-out"), btn = f.querySelector("button");
     if (!q) { input.focus(); return; }
     if (DEMO) { out.innerHTML = '<p class="pf-ask-note">In the demo, questions need MOAB running with your Claude key.</p>'; return; }
+    const person = C.emailForKey(f.dataset.askPerson);
+    if (!person) { out.innerHTML = '<p class="pf-ask-note">MOAB lost track of who this is. Reload the page and ask again.</p>'; return; }
     btn.disabled = true;
-    out.innerHTML = '<p class="pf-ask-note" role="status">Thinking…</p>';
+    out.innerHTML = '<p class="pf-ask-note">Thinking…</p>'; // the box is already aria-live
     try {
-      const j = await C.postJson("/api/ask", { question: q, person: C.emailForKey(f.dataset.askPerson) }, 25000);
+      const j = await C.postJson("/api/ask", { question: q, person }, 45000); // the server may retry Claude once
       out.innerHTML = '<p class="pf-ask-q">' + esc(q) + '</p><p class="pf-ask-a">' + answerHtml(j.text || "", j.sources) + "</p>";
     } catch (err) {
       out.innerHTML = '<p class="pf-ask-note" role="alert">' + esc(/no-key/.test(err.message) ? "Add your Claude key in Settings to ask questions." : err.message) + "</p>";
