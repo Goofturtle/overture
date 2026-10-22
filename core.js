@@ -811,9 +811,12 @@
     } else {
       Object.assign(p, { now: items(raw.now, 6), education: items(raw.education, 3), work: items(raw.work, 6),
         past: objs(raw.past).map((r) => ({ role: pstr(r.role, 140), org: pstr(r.org, 140), when: pstr(r.when, 40), src: src(r.src), points: items(r.points, 4) }))
-          .filter((r) => (r.role || r.org) && (r.src.length || r.points.length)).slice(0, 8) });
+          .filter((r) => (r.role || r.org) && (r.src.length || r.points.length)).slice(0, 8),
+        // Who a public page names with them at work (shown on their past-to-present timeline), each with its source.
+        people: objs(raw.people).map((x) => ({ name: pstr(x.name, 80), role: pstr(x.role, 120), org: pstr(x.org, 120), how: pstr(x.how), when: pstr(x.when, 40), src: src(x.src) }))
+          .filter((x) => x.name && x.how && x.src.length).slice(0, 10) });
     }
-    const all = (org ? [p.facts, p.what, p.news, p.tech, p.forCall] : [p.now, p.education, p.work, p.forCall, p.past].concat(p.past.map((r) => r.points)))
+    const all = (org ? [p.facts, p.what, p.news, p.tech, p.forCall] : [p.now, p.education, p.work, p.forCall, p.past, p.people].concat(p.past.map((r) => r.points)))
       .flat().concat(p.summary ? [p.summary] : []);
     const used = Array.from(new Set(all.flatMap((b) => b.src))).sort((a, b) => a - b), renum = {};
     used.forEach((v, i) => { renum[v] = i; });

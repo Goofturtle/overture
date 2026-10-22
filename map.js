@@ -436,11 +436,16 @@
         render();
       } else { view.x = drag.vx + dx; view.y = drag.vy + dy; apply(); }
     });
+    // Two clicks on the same person card without moving it: open their past-to-present timeline (opts.onOpen), and keep it
+    // selected instead of the second click unselecting it. A drag in between never counts.
+    let lastTap = {};
     vp.addEventListener("pointerup", (e) => {
       if (!drag) return;
       const d = drag; drag = null;
       root.classList.remove("dragging");
-      if (d.moved) { paintHover(); return; }
+      if (d.moved) { lastTap = {}; paintHover(); return; }
+      if (d.id && opts.onOpen && d.id.startsWith("p:") && lastTap.id === d.id && e.timeStamp - lastTap.t < 500) { lastTap = {}; opts.onOpen(d.id.slice(2)); return; }
+      lastTap = { id: d.id, t: e.timeStamp };
       if (d.id) select(d.id);
       else if (d.frame) select(d.frame);
       else if (!e.target.closest(".edge-label")) { selected = null; $(".edge-pop", root).hidden = true; render(); }

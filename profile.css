@@ -282,3 +282,88 @@ a.who-chip:hover { color: var(--accent); }
   .pm-node, .pm-line, .pm-dot, .pf-cite, .pf-call, .pm-row, .pm-row .pf-chev, .pf-chev, .pf-open .ic { transition: none; }
   .pm-node:hover, .pf-open:hover .ic { transform: none; }
 }
+
+/* ---------- past to present (profile.js timelineHtml): a dialog over the page ---------- */
+.tl-dialog { width: min(1240px, calc(100vw - 48px)); max-height: calc(100vh - 64px); margin: 32px auto auto; border-radius: var(--r-xl); overflow: auto; }
+.tl-dialog[open] { animation: pop 140ms ease-out; }
+.tl { padding: 0 0 20px; }
+.tl-head { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 14px; padding: 18px 20px 16px 24px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.tl-head-t { min-width: 0; flex: 1; }
+.tl-kicker, .tl-d-kicker { font-size: 12px; font-weight: 600; line-height: 1.5; color: var(--muted); }
+.tl-title { font-size: 20px; font-weight: 600; line-height: 1.35; color: var(--ink); }
+.tl-title:focus { outline: none; }
+.tl-sub { font-size: 14px; line-height: 1.5; color: var(--ink-2); }
+.tl-head-acts { display: flex; align-items: center; gap: 6px; flex: none; }
+.tl-head-acts .btn { text-decoration: none; }
+.tl > .pf-state { margin: 16px 24px 0; }
+
+/* The track: stops left to right on one line; each stop is a date, a dot on the line, a card and the people under it. */
+.tl-scroll { overflow-x: auto; padding: 22px 24px 8px; scroll-padding: 24px; }
+.tl-scroll:focus-visible { outline-offset: -2px; }
+.tl-track { position: relative; display: flex; gap: 16px; min-width: min-content; }
+.tl-track::before { content: ""; position: absolute; left: 12px; right: 12px; top: 33px; height: 2px; border-radius: 2px;
+  background: linear-gradient(90deg, var(--line-2), var(--accent-line) 70%, var(--accent)); }
+.tl-stop { position: relative; display: flex; flex-direction: column; align-items: flex-start; width: 212px; flex: none; }
+.tl-when { height: 20px; font-size: 12px; font-weight: 600; line-height: 1.5; color: var(--muted); white-space: nowrap; }
+.tl-now .tl-when, .tl-call .tl-when { color: var(--accent); }
+.tl-dot { position: relative; z-index: 1; width: 12px; height: 12px; margin: 8px 0 12px 6px; border-radius: 50%; background: var(--surface); box-shadow: 0 0 0 2px var(--line-2); }
+.tl-now .tl-dot { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg), 0 0 0 4px var(--accent-line); }
+.tl-call .tl-dot { background: var(--surface); box-shadow: 0 0 0 2px var(--accent); }
+
+.tl-card { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; text-align: left; border: 1px solid var(--line); border-radius: var(--r-lg);
+  background: var(--surface); color: var(--ink); cursor: pointer; box-shadow: 0 1px 2px rgba(23, 24, 26, 0.04); transition: border-color 140ms ease, box-shadow 140ms ease; }
+.tl-card:hover { border-color: var(--line-2); box-shadow: 0 1px 2px rgba(23, 24, 26, 0.06), 0 4px 14px rgba(23, 24, 26, 0.06); }
+.tl-card[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.tl-card-now { background: var(--accent-bg); border-color: var(--accent-line); }
+.tl-tile, .tl-ic { width: 32px; height: 32px; border-radius: 9px; flex: none; }
+.tl-tile { display: inline-grid; place-items: center; font-size: 13px; font-weight: 600; line-height: 1.3; }
+.tl-ic { display: grid; place-items: center; background: var(--accent-bg); color: var(--accent); }
+.tl-ic .ic { width: 16px; height: 16px; }
+.tl-card-t { display: grid; min-width: 0; }
+.tl-role { font-size: 13.5px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.tl-org { font-size: 12.5px; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }
+
+/* Who they're connected with at that stop: a short stem down from the card, then one chip per person. */
+.tl-conn { display: grid; gap: 6px; margin-top: 10px; padding-left: 16px; border-left: 2px solid var(--line); margin-left: 15px; width: calc(100% - 15px); }
+.tl-conn-row { display: flex; flex-wrap: wrap; margin: 8px 0 0; padding: 0; border: 0; width: auto; }
+.tl-person { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px 6px 6px; text-align: left; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface); color: var(--ink); cursor: pointer; transition: border-color 140ms ease, background 140ms ease; }
+.tl-conn-row .tl-person { width: auto; max-width: 280px; }
+.tl-person:hover { background: var(--hover); border-color: var(--line-2); }
+.tl-person[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-bg); }
+.tl-guest { cursor: default; }
+.tl-guest:hover { background: var(--surface); border-color: var(--line); }
+.tl-person-t { display: grid; min-width: 0; }
+.tl-person-n { font-size: 12.5px; font-weight: 600; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tl-person-n a { color: inherit; text-decoration: none; }
+.tl-person-n a:hover { text-decoration: underline; }
+.tl-person-r { font-size: 11.5px; line-height: 1.4; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.tl-loose { margin: 14px 24px 0; padding-top: 14px; border-top: 1px solid var(--line); }
+.tl-detail { margin: 16px 24px 0; padding: 16px 18px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--canvas, var(--hover)); }
+.tl-d-h { margin-top: 2px; font-size: 16px; font-weight: 600; line-height: 1.4; color: var(--ink); }
+.tl-d-sub { margin-top: 2px; font-size: 13px; line-height: 1.5; color: var(--ink-2); }
+.tl-d-sub a { color: var(--ink); font-weight: 500; }
+.tl-d-p { margin-top: 8px; font-size: 14px; line-height: 1.6; color: var(--ink-2); }
+.tl-d-note { margin-top: 8px; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.tl-d-acts { margin-top: 10px; }
+.tl-d-acts .btn { text-decoration: none; }
+.tl-detail .pf-list { margin-top: 8px; }
+.tl-d-org { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.tl-srcs { margin: 14px 24px 0; font-size: 13px; color: var(--muted); }
+.tl-srcs summary { cursor: pointer; font-weight: 500; line-height: 1.5; }
+.tl-srcs .pf-srcs { margin-top: 8px; }
+
+/* Narrow screens: the same stops, stacked top to bottom with the line down the left. */
+@media (max-width: 640px) {
+  .tl-dialog { width: calc(100vw - 16px); margin: 8px auto auto; max-height: calc(100vh - 16px); }
+  .tl-head { padding: 14px 12px 12px 16px; }
+  .tl-scroll { overflow-x: visible; padding: 16px; }
+  .tl-track { flex-direction: column; gap: 18px; min-width: 0; }
+  .tl-track::before { left: 21px; right: auto; top: 40px; bottom: 8px; width: 2px; height: auto; background: linear-gradient(180deg, var(--line-2), var(--accent-line) 70%, var(--accent)); }
+  .tl-stop { width: 100%; padding-left: 40px; }
+  .tl-when { height: auto; }
+  .tl-dot { position: absolute; left: 0; top: 30px; margin: 0 0 0 10px; }
+  .tl-loose, .tl-detail, .tl-srcs { margin-left: 16px; margin-right: 16px; }
+}
+@media (prefers-reduced-motion: reduce) { .tl-dialog[open] { animation: none; } .tl-card, .tl-person { transition: none; } }

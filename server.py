@@ -389,7 +389,7 @@ def fetch_events(now=None):
             err = (j.get("error") or {}) if isinstance(j, dict) else {}
             reasons = " ".join(str(e.get("reason", "")) for e in err.get("errors", []) if isinstance(e, dict))
             if "accessNotConfigured" in reasons or "SERVICE_DISABLED" in json.dumps(err):
-                raise GoogleError("the Google Calendar API is off in your Google Cloud project. Turn it on (docs/GOOGLE-SETUP.md, step 2).", status)
+                raise GoogleError("the Google Calendar API is off in your Google Cloud project. Turn it on (Settings > Setup guides > Connect Google Calendar, step 2).", status)
             if status == 401:
                 raise GoogleError("Google said the sign-in expired. Connect again.", 401)
             raise GoogleError("Google Calendar answered " + str(status), status)
@@ -486,7 +486,7 @@ def name_from_event(email, inv):
         return ""
     text = "\n".join([str(inv.get("title") or ""), str(inv.get("notes") or "")])[:4000]
     for m in re.finditer(r"(?i:\b" + re.escape(first) + r")[ \t]+" + SURNAME + r"(?:[ \t]+" + SURNAME + r")?\b", text):
-        words = [w for w in m.groups() if w]
+        words = [re.sub(r"['’]s$", "", w) for w in m.groups() if w]  # "Shea Kim's team" -> Shea Kim
         while words and words[-1].lower() in NAME_STOP:
             words.pop()
         if words and words[0].lower() not in NAME_STOP:
@@ -1646,6 +1646,7 @@ DEEP_RESUMES = 8           # a search with many tool calls pauses (pause_turn) a
 DEEP_MAX_TOKENS = 10000
 FETCH_PAGE_TOKENS = 5000   # of one opened page's text, at most
 PROFILE_V = 2              # the research profile's version: a record looked up before deep research is looked up once more
+DEEP_V = 3                 # what a person's deep run asks for; 3 added "people" (who they're publicly connected with at work)
 PROFILE_CHARS = 260        # one bullet, at most
 PROFILE_SOURCES = 20
 RELATIONSHIPS = {"employee": "Employee", "contractor": "Contractor or agency", "partner": "Partner",
@@ -1671,7 +1672,7 @@ BLOCKED_DOMAINS = [
 ]
 # Never sent anywhere, never shown: what the research layer adds to a person's record.
 AUTO_KEYS = {"team", "seniority", "relationship", "tenure", "sources", "found", "foundAt", "confidence", "autoFields", "lookup",
-             "profile", "deepAt", "searched"}
+             "profile", "deepAt", "searched", "deepV"}
 
 _ITEMS_RULES = (
     "Number the pages in sources from 1 (1 is the first). Every item lists the numbers of the pages that say it; leave out "
@@ -1705,10 +1706,16 @@ RESEARCH_SYSTEM = (
     '"points": [{"text": "what they did or achieved there", "sources": [2]}]}], '
     '"education": [{"text": "degree and school, as listed on a professional profile", "sources": [2]}], '
     '"work": [{"text": "a talk, article, podcast, project, open-source work or press about their work", "sources": [3]}], '
-    '"forCall": [{"text": "something worth bringing up with them on this call, built only on the facts above", "sources": [1]}]}\n'
+    '"forCall": [{"text": "something worth bringing up with them on this call, built only on the facts above", "sources": [1]}], '
+    '"people": [{"name": "full name", "role": "their job, or empty", "org": "where, or empty", '
+    '"how": "how they are connected through work, like co-founded Forest City SynBio together, or co-hosted the TKS showcase", '
+    '"when": "like 2019, or empty", "sources": [2]}]}\n'
     + _ITEMS_RULES +
+    "people: people a public page names together with this person in a work setting: co-founders, managers, teammates on the "
+    "same team page, co-hosts, co-speakers, panelists, interviewers, co-authors, investors in their company. Only work ties a "
+    "source states; never family, partners or friends, and never anyone's contact details. "
     "Give up to 6 now items, up to 8 past jobs (newest first) with up to 4 points each, up to 3 education items, up to 6 work "
-    "items and up to 4 forCall items. "
+    "items, up to 4 forCall items and up to 10 people. "
     "relationship means their relationship to the company: employee, contractor (or agency), partner, investor (or board member), "
     "other, or unknown. Every field above sources that you fill must be backed by a source that lists it in supports."
 )
@@ -1794,8 +1801,10 @@ def skip_reason(email, m, rec, forced=False):
         return "Can't find this person: " + d + " isn't a real company (it's an example address), so there is no one to look up."
     if not m.get("named") or not personish({"name": m.get("name", ""), "email": email}):
         return "No name on the invite, and their email address doesn't show one, so MOAB can't look them up."
-    if m.get("crm") or rec.get("found") == "confirmed" or (not forced and user_has_title(rec)):
+    if m.get("crm") or (not forced and (rec.get("found") == "confirmed" or user_has_title(rec))):
         return " "  # HubSpot has their title, or the user filled this in or confirmed it: nothing to say
+    # Look up again (forced) still runs for someone you confirmed: it refreshes the research profile and who they're connected
+    # with, and merge_research never overwrites a field you confirmed or typed.
     if not source_on("web"):  # also when it was queued before web research was turned off: the worker asks again
         return WEB_OFF_NOTE
     if not claude_on():
@@ -1810,7 +1819,8 @@ def needs_research(rec, now):
         return False
     prof = rec.get("profile")
     old_profile = isinstance(prof, dict) and not (isinstance(prof.get("v"), int) and prof["v"] >= PROFILE_V)
-    if rec.get("lookup") in ("done", "unknown") and (not rec.get("deepAt") or old_profile):
+    older_run = rec.get("deepAt") and not (isinstance(rec.get("deepV"), int) and rec["deepV"] >= DEEP_V)  # before "people" was asked for
+    if rec.get("lookup") in ("done", "unknown") and (not rec.get("deepAt") or old_profile or older_run):
         return True
     if rec.get("title"):
         return False
@@ -2423,22 +2433,25 @@ def merge_research(email, result, now=None):
     with RECORDS_LOCK:
         r = load_records()
         rec = r["people"].setdefault(email, {})
+        confirmed = rec.get("found") == "confirmed"  # you confirmed them: a fresh look-up only refreshes the profile below
         auto = set(rec.get("autoFields") or [])
-        for f in RESEARCH_FIELDS + ("sources",):
+        for f in () if confirmed else RESEARCH_FIELDS + ("sources",):
             v = result.get(f)
             if f == "relationship" and v == "unknown":
                 v = ""
             if v and (f in auto or not rec.get(f)):
                 rec[f] = v
                 auto.add(f)
-        rec["autoFields"] = sorted(auto)
-        if auto:
-            rec["found"] = "auto"
+        if not confirmed:
+            rec["autoFields"] = sorted(auto)
+            if auto:
+                rec["found"] = "auto"
+            rec["lookup"] = result.get("status", "unknown")
+            rec["confidence"] = result.get("confidence", "") if result.get("status") == "done" else ""
         rec["foundAt"] = now.replace(microsecond=0).isoformat()
-        rec["lookup"] = result.get("status", "unknown")
-        rec["confidence"] = result.get("confidence", "") if result.get("status") == "done" else ""
         if "profile" in result:  # deep research ran (research_person): its profile, and that it ran, so it isn't redone for 30 days
             rec["deepAt"], rec["searched"] = rec["foundAt"], int(result.get("searched") or 0)
+            rec["deepV"] = DEEP_V  # what this deep run asked for (v3: also who they're connected with), so it's asked once, not again and again
             if result.get("profile"):
                 rec["profile"] = result["profile"]
             elif not profile_view(rec.get("profile"), "person"):
@@ -2509,6 +2522,28 @@ def _profile_lines(items, resolve, limit, personal, when=False, chars=PROFILE_CH
     return out
 
 
+PERSON_NAME_RE = re.compile(r"[A-Z][A-Za-z'’.-]+(?: [A-Z][A-Za-z'’.-]+){1,3}")
+
+
+def _profile_people(items, resolve):
+    """Who a public page names with them at work: a real-looking full name, how they're connected, and the page that says so.
+    The same contact and personal-life filter as every other line; at most 10."""
+    out, names = [], set()
+    for e in items if isinstance(items, list) else []:
+        if not isinstance(e, dict):
+            continue
+        name, how = _profile_text(e.get("name"), 80), _profile_text(e.get("how"), PROFILE_CHARS)
+        src = _profile_refs(e.get("src", e.get("sources")), resolve)
+        if not (name and PERSON_NAME_RE.fullmatch(name) and how and src) or name.lower() in names:
+            continue
+        names.add(name.lower())
+        out.append({"name": name, "role": _profile_text(e.get("role"), 120), "org": _profile_text(e.get("org"), 120), "how": how,
+                    "when": _profile_text(e.get("when"), 40), "src": src})
+        if len(out) == 10:
+            break
+    return out
+
+
 def _profile_body(obj, kind, resolve):
     """The sections of a profile (from Claude's JSON or a stored profile), every src list holding what resolve() gives."""
     personal = kind == "person"
@@ -2529,6 +2564,7 @@ def _profile_body(obj, kind, resolve):
             if len(past) == 8:
                 break
         body["past"] = past
+        body["people"] = _profile_people(obj.get("people"), resolve)
     else:
         facts = []
         for e in obj.get("facts") if isinstance(obj.get("facts"), list) else []:
@@ -2631,8 +2667,9 @@ def profile_for_ai(p):
     return out
 
 
-LATER_NOTE = "MOAB researches them in depth a week before the call."
-ORG_LATER_NOTE = "MOAB researches this company in depth a week before the call."
+_AHEAD = "a week" if DEEP_DAYS_AHEAD == 7 else str(DEEP_DAYS_AHEAD) + " days"
+LATER_NOTE = "MOAB researches them in depth " + _AHEAD + " before the call."
+ORG_LATER_NOTE = "MOAB researches this company in depth " + _AHEAD + " before the call."
 
 
 def research_status(email, rec, m, now=None):
@@ -2821,7 +2858,7 @@ def gong_base(base):
     except ValueError:
         p, host = None, ""
     if not p or p.scheme != "https" or "@" in p.netloc or not (host == "gong.io" or host.endswith(".gong.io")):
-        raise ApiError("the Gong address must be an https address on gong.io, like https://api.gong.io (see docs/GONG-SETUP.md)")
+        raise ApiError("the Gong address must be an https address on gong.io, like https://api.gong.io (see Settings > Setup guides > Connect Gong)")
     return "https://" + p.netloc.lower()
 
 
@@ -2917,9 +2954,9 @@ def api_call(service, method, path, body=None, deadline=None):
     if status == 401:
         raise ApiError(name + " didn't accept " + {"hubspot": "the access token", "gong": "the access key"}.get(service, "the API key") + " (401). Run tools/connect.py again.", 401)
     if status == 403:
-        raise ApiError(name + " said no (403): " + {"hubspot": "the private app is missing a scope, see docs/HUBSPOT-SETUP.md",
-                                                    "gong": "the key has no access from here, see docs/GONG-SETUP.md"}.get(service,
-                                                    "API access may be off for your workspace, see docs/GRANOLA-SETUP.md"), 403)
+        raise ApiError(name + " said no (403): " + {"hubspot": "the private app is missing a scope, see Settings > Setup guides > Connect HubSpot",
+                                                    "gong": "the key has no access from here, see Settings > Setup guides > Connect Gong"}.get(service,
+                                                    "API access may be off for your workspace, see Settings > Setup guides > After the call with Granola"), 403)
     if status == 429:
         raise ApiError(name + " is limiting requests (429). MOAB tries again in a minute.", 429)
     raise ApiError(name + " answered " + str(status), status)
@@ -3412,7 +3449,7 @@ def hubspot_write(plan, call_id, now=None):
 def hubspot_save(body):
     """POST /api/hubspot/save. Without confirm: only the plan, nothing is written. With confirm: true: write exactly that plan."""
     if not hubspot_token():
-        return 409, {"error": "HubSpot isn't connected. See docs/HUBSPOT-SETUP.md."}
+        return 409, {"error": "HubSpot isn't connected. See Settings > Setup guides > Connect HubSpot."}
     if not token_info():
         return 409, {"error": "Connect Google Calendar first, so MOAB knows the call."}
     try:
@@ -5466,7 +5503,7 @@ def mentions_post(body, now=None):
             if not setting_on(records, "gongTranscripts"):
                 return 403, {"error": "Turn on Read Gong transcripts on the Data page first."}
             if not crm_configured("gong"):
-                return 409, {"error": "Gong isn't connected. See docs/GONG-SETUP.md."}
+                return 409, {"error": "Gong isn't connected. See Settings > Setup guides > Connect Gong."}
             try:
                 lines = gong_transcript_lines(ctx["invite"], now)
             except ApiError as e:
@@ -5716,7 +5753,7 @@ def mention_hubspot(body):
     (nothing is). With confirm: true and that planId: write it. Name and job title only, never an email address or phone number.
     Creating a contact with associations (type 279, contact to company) is from HubSpot's docs; untested against a real account."""
     if not hubspot_token():
-        return 409, {"error": "HubSpot isn't connected. See docs/HUBSPOT-SETUP.md."}
+        return 409, {"error": "HubSpot isn't connected. See Settings > Setup guides > Connect HubSpot."}
     try:
         cid, mid, confirm, pid = clean_mention_hubspot(body)
         block = (load_records().get("mentions") or {}).get(cid) or {}
@@ -6130,7 +6167,7 @@ def granola_fetch(call_id, now=None, forced=False):
     if not source_on("granola"):
         return 403, {"error": "Turn on Granola in Settings > Research sources and privacy first."}
     if not granola_key():
-        return 409, {"error": "Granola isn't connected. See docs/GRANOLA-SETUP.md."}
+        return 409, {"error": "Granola isn't connected. See Settings > Setup guides > After the call with Granola."}
     if not token_info():
         return 409, {"error": "Connect Google Calendar first, so MOAB knows the call."}
     try:
@@ -6416,7 +6453,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/auth/google":
             client = google_client()
             if not client:
-                return self.send_page(503, "Google sign-in isn't set up yet", "Follow docs/GOOGLE-SETUP.md to add your Google OAuth client, then restart server.py.")
+                return self.send_page(503, "Google sign-in isn't set up yet", "Follow the steps in docs/GOOGLE-SETUP.md (in MOAB: Settings > Setup guides > Connect Google Calendar) to add your Google OAuth client, then restart server.py.")
             url, _ = new_auth_request(client[0])
             return self.redirect(url)
         if path == "/auth/google/callback":

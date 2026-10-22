@@ -214,6 +214,7 @@
     const rel = RELATION[r.relationship];
     const role = [w.title ? esc(w.title) : "", w.company ? ctl(opts, "company", w.company, esc(w.companyLabel)) : ""].filter(Boolean).join('<span class="pf-at"> at </span>');
     const actions = (w.calls.length ? ctl(opts, "call", w.calls[0].id, ic("arrowRight") + "Open brief", "btn secondary sm") : "")
+      + '<button type="button" class="btn ghost sm" data-open-tl="' + esc(C.personKey(email)) + '">' + ic("clock") + "Past to present</button>"
       + (opts.canAgain && ["done", "unknown", "error", "later"].includes(info.status) ? '<button type="button" class="btn ghost sm" data-rs-again="' + esc(email) + '">' + ic("rotate") + (info.status === "later" ? "Look up now" : "Look up again") + "</button>" : "");
     let h = '<div class="topbar"><div class="topbar-inner"><nav class="co-crumbs" aria-label="Breadcrumb"><a href="#/map">People</a><span class="co-crumb-sep" aria-hidden="true">/</span>'
       + '<span class="co-crumb-here" aria-current="page">' + esc(w.name) + "</span></nav></div></div>";
@@ -489,6 +490,102 @@
     slot.innerHTML = open ? nodeCard(g, btn.dataset.pm, opts) : "";
   }
 
+  // ---------- past to present: one person's career as a timeline, with who they're connected to at each stop ----------
+  // Stops run oldest to newest: past jobs (the profile lists them newest first), their job now, then each call with you.
+  // People a public page names with them (profile.people) hang under the stop whose company they share; the rest are listed after.
+  // Other guests on a call hang under that call.
+  const sameOrg = (a, b) => { const x = orgKey(a), y = orgKey(b); return !!x && !!y && (x === y || (Math.min(x.length, y.length) >= 3 && (x.includes(y) || y.includes(x)))); };
+  function careerStops(email) {
+    const w = who(email), pr = w.info.profile;
+    const stops = (pr ? pr.past.slice().reverse() : []).map((r, i) => ({ id: "s" + i, kind: "past", role: r.role, org: r.org, when: r.when, src: r.src, points: r.points, people: [] }));
+    stops.push({ id: "now", kind: "now", role: w.title, org: w.companyLabel || w.company, company: w.company, when: "Now", src: [], points: pr ? pr.now : [], people: [] });
+    w.calls.forEach((c, i) => stops.push({ id: "c" + i, kind: "call", call: c, when: String(c.when).split(" · ")[0], people: [],
+      guests: c.attendees.filter((a) => a.email !== email) }));
+    const loose = [];
+    (pr && pr.people ? pr.people : []).forEach((p, i) => {
+      const at = p.org ? stops.find((s) => s.kind !== "call" && (sameOrg(p.org, s.org) || (s.kind === "now" && sameOrg(p.org, s.company)))) : null;
+      (at ? at.people : loose).push(Object.assign({ id: "p" + i }, p));
+    });
+    return { w, pr, stops, loose };
+  }
+  const tlBtn = (id, cls, inner, label) => '<button type="button" class="' + cls + '" data-tl-item="' + id + '" aria-pressed="false" aria-label="' + esc(label) + '">' + inner + "</button>";
+  function tlPersonChip(p) {
+    return "<li>" + tlBtn(p.id, "tl-person", avatar({ name: p.name, email: "" }, "xs") + '<span class="tl-person-t"><span class="tl-person-n">' + esc(p.name) + "</span>"
+      + (p.role ? '<span class="tl-person-r">' + esc(p.role) + "</span>" : "") + "</span>", p.name + (p.role ? ", " + p.role : "") + ": how they're connected") + "</li>";
+  }
+  function tlGuestChip(a, opts) {
+    return '<li><span class="tl-person tl-guest">' + avatar(a, "xs") + '<span class="tl-person-t"><span class="tl-person-n">' + ctl(opts, "person", a.email, esc(a.name)) + "</span>"
+      + '<span class="tl-person-r">On the call</span></span></span></li>';
+  }
+  function tlStop(s, opts) {
+    let card;
+    if (s.kind === "call") {
+      card = tlBtn(s.id, "tl-card tl-card-call", '<span class="tl-ic" aria-hidden="true">' + ic("calendar") + '</span><span class="tl-card-t"><span class="tl-role">Call with you</span><span class="tl-org">'
+        + esc(s.call.title) + "</span></span>", "Call with you: " + s.call.title + ", " + s.call.when);
+    } else {
+      const title = s.role || s.org || "Role not public", sub = s.role ? s.org : "";
+      card = tlBtn(s.id, "tl-card" + (s.kind === "now" ? " tl-card-now" : ""), coTile(s.org || title, "tl-tile") + '<span class="tl-card-t"><span class="tl-role">' + esc(title) + "</span>"
+        + (sub ? '<span class="tl-org">' + esc(sub) + "</span>" : "") + "</span>", [title, sub, s.when].filter(Boolean).join(", "));
+    }
+    const conn = s.people.map(tlPersonChip).join("") + (s.guests || []).map((a) => tlGuestChip(a, opts)).join("");
+    return '<li class="tl-stop tl-' + s.kind + '"><p class="tl-when">' + esc(s.when || "Date not public") + '</p><span class="tl-dot" aria-hidden="true"></span>' + card
+      + (conn ? '<ul class="tl-conn" role="list" aria-label="' + esc("Connected here") + '">' + conn + "</ul>" : "") + "</li>";
+  }
+  // The details for one stop or person, shown under the timeline when it's picked.
+  function tlDetail(model, id, opts) {
+    const { w, pr, stops, loose } = model, sources = pr ? pr.sources : [];
+    const s = stops.find((x) => x.id === id);
+    const p = s ? null : stops.flatMap((x) => x.people).concat(loose).find((x) => x.id === id);
+    if (p) {
+      return '<p class="tl-d-kicker">Connected with ' + esc(first(w.name)) + "</p><h3 class=\"tl-d-h\">" + esc(p.name) + "</h3>"
+        + ([p.role, p.org].filter(Boolean).length ? '<p class="tl-d-sub">' + esc([p.role, p.org].filter(Boolean).join(" · ")) + "</p>" : "")
+        + '<p class="tl-d-p">' + esc(p.how) + (p.when ? " (" + esc(p.when) + ")" : "") + cites(p.src, sources) + "</p>"
+        + '<p class="tl-d-note">From public pages that name them together. MOAB keeps work ties only.</p>';
+    }
+    if (!s) return "";
+    if (s.kind === "call") {
+      return '<p class="tl-d-kicker">' + esc(s.call.when) + '</p><h3 class="tl-d-h">' + esc(s.call.title) + "</h3>"
+        + '<p class="tl-d-sub">' + esc(plural(s.call.attendees.length, "guest")) + " · " + esc(s.call.company) + "</p>"
+        + '<p class="tl-d-acts">' + ctl(opts, "call", s.call.id, ic("arrowRight") + "Open brief", "btn secondary sm") + "</p>";
+    }
+    const head = '<p class="tl-d-kicker">' + esc(s.when || "Date not public") + '</p><h3 class="tl-d-h">' + esc(s.role || s.org || "Role not public") + cites(s.src, sources) + "</h3>"
+      + (s.role && s.org ? '<p class="tl-d-sub">' + (s.kind === "now" && s.company ? ctl(opts, "company", s.company, esc(s.org)) : esc(s.org)) + "</p>" : "");
+    const body = s.points.length ? bullets(s.points, sources, "pf-list-sm") : '<p class="tl-d-note">No public details about this role.</p>';
+    const org = s.kind === "now" && s.company ? orgMini(s.company, opts) : "";
+    return head + body + (org ? '<div class="tl-d-org"><p class="tl-d-kicker">About ' + esc(s.org) + "</p>" + org + "</div>" : "");
+  }
+  const plural = (n, word) => n + " " + word + (n === 1 ? "" : "s");
+  function timelineHtml(email, opts) {
+    opts = opts || {};
+    const model = careerStops(email), { w, pr, stops, loose } = model;
+    const state = pr ? "" : stateHtml(w.info.status, w.info.note, w.name);
+    return '<div class="tl" data-tl-email-key="' + esc(C.personKey(email)) + '"><header class="tl-head">' + avatar({ name: w.name, email }, "lg")
+      + '<div class="tl-head-t"><p class="tl-kicker">Past to present</p><h2 class="tl-title" id="tlTitle" tabindex="-1">' + esc(w.name) + "</h2>"
+      + ([w.title, w.companyLabel].filter(Boolean).length ? '<p class="tl-sub">' + esc([w.title, w.companyLabel].filter(Boolean).join(" at ")) + "</p>" : "") + "</div>"
+      + '<div class="tl-head-acts">' + ctl(opts, "person", email, "Full profile", "btn ghost sm") + '<button type="button" class="icon-btn tl-close" data-tl-close aria-label="Close">' + ic("x") + "</button></div></header>"
+      + state + '<div class="tl-scroll" tabindex="0" role="region" aria-label="' + esc(w.name + "'s career, oldest first") + '"><ol class="tl-track" role="list">'
+      + stops.map((s) => tlStop(s, opts)).join("") + "</ol></div>"
+      + (loose.length ? '<div class="tl-loose"><p class="tl-d-kicker">Also connected through work</p><ul class="tl-conn tl-conn-row" role="list">' + loose.map(tlPersonChip).join("") + "</ul></div>" : "")
+      + '<div class="tl-detail" aria-live="polite">' + tlDetail(model, "now", opts) + "</div>"
+      + (pr && pr.sources.length ? '<details class="tl-srcs"><summary>' + esc(plural(pr.sources.length, "source")) + "</summary>" + sourcesList(pr.sources) + "</details>" : "")
+      + (DEMO ? '<p class="pf-foot">Sample data: made up for the demo.</p>' : "") + "</div>";
+  }
+  // Clicks inside a drawn timeline: pick a stop or a person to see its details.
+  function mountTimeline(root, email, opts) {
+    const model = careerStops(email);
+    const pick = (id) => {
+      root.querySelectorAll("[data-tl-item]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.tlItem === id)));
+      root.querySelector(".tl-detail").innerHTML = tlDetail(model, id, opts || {});
+    };
+    pick("now");
+    root.onclick = (e) => { const b = e.target.closest("[data-tl-item]"); if (b) pick(b.dataset.tlItem); }; // one handler, even when reopened
+  }
+  // Once the timeline is on screen: scroll the track so the newest stops (now, and your calls) are in view.
+  function showLatest(root) {
+    const sc = root.querySelector(".tl-scroll");
+    if (sc && sc.scrollWidth > sc.clientWidth + 1) sc.scrollLeft = sc.scrollWidth; // only when it doesn't all fit
+  }
+
   window.CP = { who, ctl, cites, bullets, personSections, briefPerson, forCallItems, forCallHtml, withYou, pageHtml, panelPerson,
-    orgSections, orgBlock, orgMini, graph, mapHtml, listHtml, nodeCard, mountMap, toggleRow, stateHtml, metaHtml, orgKey };
+    orgSections, orgBlock, orgMini, graph, mapHtml, listHtml, nodeCard, mountMap, toggleRow, stateHtml, metaHtml, orgKey, timelineHtml, mountTimeline, showLatest };
 })();

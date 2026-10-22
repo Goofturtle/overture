@@ -158,7 +158,7 @@
       const keyBox = group("Claude API key", '<form class="st-pad st-key" id="claudeKeyForm" autocomplete="off">'
         + '<p class="st-key-state" id="claudeKeyState" role="status">' + (DEMO ? "Not available in the demo." : "Checking…") + "</p>"
         + '<div class="st-key-row"><label class="sr-only" for="claudeKey">Claude API key</label>'
-        + '<input id="claudeKey" class="input sm" type="password" placeholder="sk-ant-…" autocomplete="new-password" spellcheck="false" aria-describedby="claudeKeyState"' + (DEMO ? " disabled" : "") + ">"
+        + '<input id="claudeKey" class="input sm" type="password" placeholder="sk-ant-…" autocomplete="off" data-1p-ignore data-lpignore="true" spellcheck="false" aria-describedby="claudeKeyState"' + (DEMO ? " disabled" : "") + ">"
         + '<button type="submit" class="btn primary sm"' + (DEMO ? " disabled" : "") + ">Save key</button>"
         + '<button type="button" class="btn ghost sm" id="claudeKeyRemove" hidden>Remove</button></div>'
         + '<p class="st-key-help">Get one at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">console.anthropic.com</a> → API keys. '

@@ -126,7 +126,7 @@
       if (s.listening) return '<p class="p-listen on"><span class="live-dot" aria-hidden="true"></span>Listening via Meetily' + (s.lines ? ' · <span class="num">' + esc(plural(s.lines, "line")) + "</span>" : "") + "</p>";
       if (s.recording && s.callId === state.callId) return '<p class="p-listen"><span class="live-dot off" aria-hidden="true"></span>Meetily is recording. No new words for a moment.</p>';
       if (s.recording) return '<p class="p-listen"><span class="live-dot off" aria-hidden="true"></span>Meetily is recording another call. <button type="button" class="link-btn" data-mt-pick>Use it for this call</button></p>';
-      return '<p class="p-listen"><span class="live-dot off" aria-hidden="true"></span>' + (s.found ? "Meetily is on. Start recording in Meetily and MOAB reads along." : "Meetily is on, but MOAB can't find its recordings folder. See docs/MEETILY-SETUP.md.") + "</p>";
+      return '<p class="p-listen"><span class="live-dot off" aria-hidden="true"></span>' + (s.found ? "Meetily is on. Start recording in Meetily and MOAB reads along." : "Meetily is on, but MOAB can't find its recordings folder. See the Meetily guide in MOAB: Settings > Setup guides.") + "</p>";
     }
     return panelPrefs() && panelPrefs().listening && !meetilyOn() ? '<p class="p-listen"><span class="live-dot off" aria-hidden="true"></span>Live listening needs Meetily: turn it on in Settings, Research sources.</p>' : "";
   }

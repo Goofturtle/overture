@@ -155,7 +155,7 @@
     if (!r) { if (!location.hash || location.hash === "#") go("#/home", true); return; } // in-page anchors are handled by data-jump
     if (r.bad) { go("#/home", true); return; }
     // Leaving a page closes its dialogs, so the drawer can never edit a call that is no longer on screen.
-    ["#palette", "#drawer", "#checkDialog"].forEach((s) => { if ($(s).open) $(s).close("cancel"); });
+    ["#palette", "#drawer", "#checkDialog", "#tlDialog"].forEach((s) => { if ($(s).open) $(s).close("cancel"); });
     closeNav();
     editingPerson = null;
     editingCompany = null;
@@ -1998,7 +1998,7 @@
   }
   function mapSide(d) {
     if (!d) {
-      return '<h2 tabindex="-1" id="mapSideH">How to read it</h2><div class="map-hint"><p>Click a person or company to see every link. Click a label on a line to see why it exists. Drag cards to move them; scroll or use the zoom bar to move around.</p></div>'
+      return '<h2 tabindex="-1" id="mapSideH">How to read it</h2><div class="map-hint"><p>Click a person or company to see every link. Double-click a person to see their past to present. Click a label on a line to see why it exists. Drag cards to move them; scroll or use the zoom bar to move around.</p></div>'
         + '<h3 class="sub-label">What the agent noticed</h3>' + insights().map((t) => '<p class="map-insight">' + esc(t) + "</p>").join("");
     }
     const n = d.node;
@@ -2013,7 +2013,8 @@
         + "<p>" + esc((kindWord[r.kind] || "") + (r.label && r.kind !== "works" ? " · " + r.label : "") + (r.why ? ". " + r.why : "")) + "</p>"
         + (r.kind === "mentioned" && r.explain ? C.explainFold(r.explain, { open: true }) : "")
         + (r.kind === "mentioned" && r.mentionId ? '<p><button type="button" class="link-btn" data-conn-remove="' + esc(r.connId) + '">Remove this connection</button></p>' : "") + "</li>").join("") + "</ul>"
-      + '<div class="side-actions">' + (guest ? '<a class="btn secondary sm" href="#/people/' + esc(C.personKey(guest)) + '">' + ic("arrowRight") + "Open profile</a>" : "")
+      + '<div class="side-actions">' + (guest ? '<a class="btn secondary sm" href="#/people/' + esc(C.personKey(guest)) + '">' + ic("arrowRight") + "Open profile</a>"
+        + '<button type="button" class="btn ghost sm" data-open-tl="' + esc(C.personKey(guest)) + '">' + ic("clock") + "Past to present</button>" : "")
       + (d.callId ? '<a class="btn ' + (guest ? "ghost" : "secondary") + ' sm" href="#/calls/' + d.callId + '">' + (guest ? "" : ic("arrowRight")) + "Open the call</a>" : "")
       + ((n.type === "prospect" || n.type === "past") && companyBySlug(slug(n.label)) ? '<a class="btn ghost sm" href="#/companies/' + slug(n.label) + '">Open company</a>' : "")
       + (n.type === "person" ? '<a class="btn ghost sm" href="#/companies/' + slug(inviteById(n.callId).company) + '">Their company</a>' : "") + "</div>";
@@ -2044,7 +2045,19 @@
     const opts = app.mapView === "all" ? { mode: "board" } : { mode: "stack", callId: app.mapView };
     opts.onSelect = (d) => { $("#mapSide").innerHTML = mapSide(d); };
     opts.onRemove = removeConnection;
+    opts.onOpen = openTimeline; // double-click a person: their past to present
     mapInstance = window.CMap.mount($("#board"), opts);
+  }
+  // One guest's past to present (profile.js), in a dialog over the page. Opened by double-clicking them on the People map, or
+  // by any [data-open-tl] button (the map's side card, the person page).
+  function openTimeline(email) {
+    const dlg = $("#tlDialog");
+    if (!dlg || !email || !D.people[email]) return;
+    dlg.innerHTML = window.CP.timelineHtml(email, profileLinks);
+    window.CP.mountTimeline(dlg, email, profileLinks);
+    if (!dlg.open) dlg.showModal();
+    window.CP.showLatest(dlg);
+    $("#tlTitle").focus();
   }
   // A wrong connection on the map: take it off (live: saved in MOAB's records, and never added again; demo: this page only).
   async function removeConnection(edge) {
@@ -2120,7 +2133,7 @@
       + '<div class="lv-steps"><h3>Zoom App</h3><ol><li>Host on HTTPS with the four security headers Zoom requires (see <code>_headers</code>). GitHub Pages does not send them.</li>'
       + "<li>Create a <b>General app</b> in the Zoom App Marketplace. Set the Home URL to <code>…/panel.html?host=zoom</code> and add the host and <code>appssdk.zoom.us</code> to the domain allow list.</li>"
       + "<li>Add the in-meeting APIs (meeting context, participants) and the <code>zoomapp:inmeeting</code> scope.</li><li>Use Local Test → Add App Now, then open it from <b>Apps</b> in a meeting.</li></ol></div></div>"
-      + '<p class="list-foot">Full steps: <a href="#/guides/extension">Put MOAB beside Google Meet and Zoom</a> · <a href="#/guides/in-call">How the in-call panel works</a> · <a href="#/guides">All setup guides</a></p></section>';
+      + '<p class="list-foot">Full steps: <a href="#/guides/extension">Put MOAB beside Google Meet and Zoom</a> · <a href="#/guides/in-call">Install as a Meet add-on or Zoom App (developers)</a> ·<a href="#/guides">All setup guides</a></p></section>';
   }
 
   // ---------- data page ----------
@@ -2533,6 +2546,10 @@
 
     window.addEventListener("hashchange", route);
     document.addEventListener("click", (e) => {
+      const tlOpen = e.target.closest("[data-open-tl]");
+      if (tlOpen) { openTimeline(C.emailForKey(tlOpen.dataset.openTl)); return; }
+      const tlDlg = $("#tlDialog");
+      if (tlDlg && tlDlg.open && (e.target.closest("[data-tl-close]") || e.target === tlDlg)) { tlDlg.close(); return; } // the X, or a click on the dim backdrop
       const jump = e.target.closest("[data-jump]");
       if (jump) { e.preventDefault(); const t = document.getElementById(jump.dataset.jump); if (t) { t.scrollIntoView({ behavior: "smooth", block: "start" }); t.setAttribute("tabindex", "-1"); t.focus({ preventScroll: true }); } return; }
       const run = e.target.closest("[data-run]");

@@ -612,9 +612,39 @@ class Research(Fresh):
         self.assertEqual(S.name_from_event("shea@tks.world", {"title": "Meeting with Shea Kim CEO", "notes": ""}), "Shea Kim")
         self.assertEqual(S.name_from_event("shea@tks.world", {"title": "Shea Thursday", "notes": "Shea October review"}), "")
         self.assertEqual(S.name_from_event("shea@tks.world", {"title": "", "notes": "Call with Shea McDonald-Ray"}), "Shea McDonald-Ray")
+        self.assertEqual(S.name_from_event("shea@tks.world", {"title": "Call with Shea Kim's team", "notes": ""}), "Shea Kim")
+
+    def test_setup_guides_use_only_markdown_the_guide_pages_can_draw(self):
+        # guides.js draws headings, lists, code blocks, `code`, **bold** and links. A table or a #### heading would show as raw text.
+        root = Path(S.__file__).parent
+        files = re.findall(r'file: "([A-Z-]+\.md)"', (root / "guides.js").read_text(encoding="utf-8"))
+        self.assertGreaterEqual(len(files), 7)
+        for f in files:
+            for n, line in enumerate((root / "docs" / f).read_text(encoding="utf-8").splitlines(), 1):
+                self.assertFalse(re.match(r"^\s*\|", line) or line.startswith("####"), f + ":" + str(n) + " can't be drawn: " + line)
         e = ev("h1", "2026-10-22T19:15:00+00:00", 25, [SELF, att("shea@tks.world")], summary="Prototype review")
         e["description"] = "<p>Her name is <b>Shea&nbsp;Tough</b>.</p>"
         self.assertEqual([a["name"] for a in S._others(e, ME["email"])], ["Shea Tough"])
+
+    def test_people_she_is_publicly_connected_with_are_kept_only_with_a_source(self):
+        seen = {S.url_key("https://www.tks.world/team"): {"cited": [], "age": ""}}
+        obj = {"found": True, "confidence": "high", "sources": [{"url": "https://www.tks.world/team", "label": "TKS team"},
+                                                                {"url": "https://unseen.example.org/x", "label": "Not seen"}],
+               "summary": {"text": "Director at TKS.", "sources": [1]},
+               "people": [{"name": "Navid Nathoo", "role": "Co-founder", "org": "TKS", "how": "Leads TKS, where she is a director.", "sources": [1]},
+                          {"name": "Pat Lee", "how": "Named with her on a page MOAB never saw.", "sources": [2]},
+                          {"name": "Sam Tough", "how": "Her husband.", "sources": [1]},
+                          {"name": "the team", "how": "Worked together.", "sources": [1]},
+                          {"name": "Navid Nathoo", "how": "Again.", "sources": [1]}]}
+        prof = S.clean_profile(obj, seen, "person", "Shea Tough")
+        self.assertEqual([p["name"] for p in prof["people"]], ["Navid Nathoo"])
+        self.assertEqual(prof["people"][0]["src"], [0])
+        self.assertEqual([p["name"] for p in S.profile_view(prof, "person")["people"]], ["Navid Nathoo"])
+        # A record whose last deep run didn't ask for people is researched once more, then not again.
+        now = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
+        rec = {"lookup": "done", "title": "Director", "autoFields": ["title"], "deepAt": "2026-10-22T03:00:00+00:00", "profile": prof}
+        self.assertTrue(S.needs_research(rec, now))
+        self.assertFalse(S.needs_research(dict(rec, deepV=S.DEEP_V), now))
 
     def test_name_from_the_event_description(self):
         inv = {"title": "MOAB prototype review", "notes": "Call with Shea Kim from TKS to improve the prototype."}
@@ -805,15 +835,18 @@ class Research(Fresh):
         S.merge_research(email, dict(S.unknown_result(), status="done", title="CTO", relationship="employee"), NOW - timedelta(days=40))
         S.write_records("person", {"email": email, "confirm": True})
         f = self.fake(reply(FOUND, FOUND_URLS))
-        self.assertFalse(self.queue([att(email, "Priya Raman")])[0])
-        st, body = S.request_research(email)
-        self.assertEqual(st, 400)
-        self.assertTrue(body["error"].strip())
+        self.assertFalse(self.queue([att(email, "Priya Raman")])[0])  # never on its own
         while S.research_step(NOW):
             pass
         self.assertEqual(f.calls, [])
+        # Look up again: allowed, but it only refreshes the research profile; what you confirmed stays as it was.
+        st, body = S.request_research(email)
+        self.assertEqual(st, 202)
+        while S.research_step(NOW):
+            pass
+        self.assertEqual(len(f.calls), 1)
         rec = S.load_records()["people"][email]
-        self.assertEqual((rec["found"], rec.get("team", "")), ("confirmed", ""))
+        self.assertEqual((rec["found"], rec["title"], rec.get("team", "")), ("confirmed", "CTO", ""))
 
     def test_no_repeat_within_30_days(self):
         f = self.fake(reply({"found": False}), reply({"found": False}))

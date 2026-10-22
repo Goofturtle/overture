@@ -17,15 +17,12 @@ The token stays in `centralize/.data/hubspot.json` on this PC. It never reaches 
    You need to be a Super Admin.
 2. **Basic info**: name `MOAB`.
 3. **Scopes**: press **Add new scope** and tick these:
-
-   | Scope | Why |
-   |---|---|
-   | `crm.objects.companies.read` | find the company by its website domain |
-   | `crm.objects.deals.read` | the company's deals and their stages |
-   | `crm.objects.contacts.read` | the guests' names and job titles |
-   | `crm.objects.contacts.write` | change a job title you accepted; attach the note to the contacts |
-   | `crm.objects.companies.write` | attach the note to the company |
-   | `crm.objects.deals.write` | attach the note to the open deal |
+   - `crm.objects.companies.read`: find the company by its website domain
+   - `crm.objects.deals.read`: the company's deals and their stages
+   - `crm.objects.contacts.read`: the guests' names and job titles
+   - `crm.objects.contacts.write`: change a job title you accepted; attach the note to the contacts
+   - `crm.objects.companies.write`: attach the note to the company
+   - `crm.objects.deals.write`: attach the note to the open deal
 
    Notes have no scope of their own in HubSpot's scope list; reading and writing them goes through the scopes of the records
    they sit on. This is **untested against a real account**: if reading notes is refused, MOAB still shows the company and its

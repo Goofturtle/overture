@@ -10,7 +10,7 @@
     meetily: { file: "MEETILY-SETUP.md", title: "Live transcript with Meetily", icon: "note", blurb: "Free and on this PC: MOAB reads along while a call runs." },
     granola: { file: "GRANOLA-SETUP.md", title: "After the call with Granola", icon: "note", blurb: "MOAB reads Granola's note and transcript when the call ends." },
     extension: { file: "CHROME-EXTENSION.md", title: "MOAB beside Google Meet and Zoom", icon: "panel", blurb: "The Chrome side panel: load it once, then it opens next to your call." },
-    "in-call": { file: "IN-CALL.md", title: "How the in-call panel works", icon: "video", blurb: "What the panel shows during a call and where its facts come from." },
+    "in-call": { file: "IN-CALL.md", title: "Install as a Meet add-on or Zoom App", icon: "video", blurb: "For developers: publish the in-call panel inside Google Meet and Zoom (HTTPS hosting, Marketplace)." },
   };
   const FILE_TO_NAME = Object.fromEntries(Object.entries(GUIDES).map(([k, g]) => [g.file, k]));
   const cache = {};
@@ -41,12 +41,14 @@
     while (i < lines.length) {
       const l = lines[i];
       if (!l.trim()) { i++; continue; }
-      if (/^```/.test(l)) {
-        const body = [];
-        for (i++; i < lines.length && !/^```/.test(lines[i]); i++) body.push(lines[i]);
+      const fence = l.match(/^(\s*)```\s*([\w-]*)/);
+      if (fence) { // also indented under a step; its language names the box (json, text), plain or shell is a command
+        const body = [], pad = fence[1].length;
+        for (i++; i < lines.length && !/^\s*```/.test(lines[i]); i++) body.push(lines[i].slice(Math.min(pad, lines[i].search(/\S|$/))));
         i++;
-        out.push('<div class="gd-pre"><div class="gd-pre-bar"><span>Command</span><button type="button" class="gd-copy" data-copy-code>Copy</button></div><pre><code>'
-          + esc(body.join("\n")) + "</code></pre></div>");
+        const lang = fence[2].toLowerCase(), label = { json: "JSON", text: "Text", txt: "Text", "": "Command", bash: "Command", sh: "Command", powershell: "Command" }[lang] || lang.toUpperCase();
+        out.push('<div class="gd-pre"><div class="gd-pre-bar"><span>' + esc(label) + '</span><span class="sr-only" role="status" data-copy-status></span>'
+          + '<button type="button" class="gd-copy" data-copy-code aria-label="' + esc("Copy " + label.toLowerCase()) + '">Copy</button></div><pre><code>' + esc(body.join("\n")) + "</code></pre></div>");
         continue;
       }
       const h = l.match(/^(#{1,3})\s+(.*)$/);
@@ -63,7 +65,7 @@
       if (listAt(l) && !listAt(l)[1]) {
         const ordered = /\d/.test(listAt(l)[2]);
         const items = [];
-        while (i < lines.length && lines[i].trim()) {
+        while (i < lines.length && lines[i].trim() && !/^\s*```/.test(lines[i])) { // a code block ends the list; numbering resumes after it
           const m = listAt(lines[i]);
           if (m && !m[1]) { items.push({ text: m[3], subs: [], num: parseInt(m[2], 10) || items.length + 1 }); } // keep the guide's own number
           else if (m && items.length) { items[items.length - 1].subs.push(m[3]); }
@@ -81,7 +83,7 @@
         continue;
       }
       const para = [];
-      while (i < lines.length && lines[i].trim() && !/^```/.test(lines[i]) && !/^#{1,3}\s/.test(lines[i]) && !(listAt(lines[i]) && !listAt(lines[i])[1])) para.push(lines[i++].trim());
+      while (i < lines.length && lines[i].trim() && !/^\s*```/.test(lines[i]) && !/^#{1,3}\s/.test(lines[i]) && !(listAt(lines[i]) && !listAt(lines[i])[1])) para.push(lines[i++].trim());
       const text = para.join(" ");
       // A short line with no full stop right before a list ("Notes") reads as a small heading.
       if (para.length === 1 && text.length < 40 && !/[.:!?]$/.test(text) && i < lines.length && listAt(lines[i] || "")) out.push('<h3 class="gd-h">' + inline(text) + "</h3>");
@@ -119,10 +121,16 @@
     };
     if (cache[name]) { paint(cache[name]); return g.title; }
     el.innerHTML = crumbs(g.title) + '<div class="gd-page"><p class="gd-p" role="status">Loading the guide…</p></div>';
-    fetch("docs/" + g.file).then((r) => (r.ok ? r.text() : Promise.reject())).then((md) => {
+    const still = () => (location.hash.split("/").filter(Boolean)[1] || "") === name; // only draw if you're still on this guide
+    fetch("docs/" + g.file).then((r) => (r.ok ? r.text() : Promise.reject(new Error("not sent")))).then((md) => {
       cache[name] = md;
-      if (location.hash === "#/guides/" + name) paint(md);
-    }).catch(() => { el.innerHTML = crumbs(g.title) + '<div class="gd-page"><p class="gd-p">MOAB\'s server didn\'t send this guide. Is server.py running?</p></div>'; });
+      if (!still()) return;
+      paint(md);
+      // The page's heading arrived after the route tried to focus it: focus it now, unless you've moved focus yourself.
+      if (document.activeElement === document.body || !document.activeElement) { const h1 = el.querySelector("h1"); if (h1) h1.focus({ preventScroll: true }); }
+    }, () => {
+      if (still()) el.innerHTML = crumbs(g.title) + '<div class="gd-page"><p class="gd-p" role="alert">MOAB\'s server didn\'t send this guide. Is server.py running?</p></div>';
+    });
     return g.title;
   }
 
@@ -130,10 +138,14 @@
   document.addEventListener("click", (e) => {
     const cp = e.target.closest("[data-copy-code]");
     if (cp) {
-      const code = cp.closest(".gd-pre").querySelector("code").textContent;
-      (navigator.clipboard ? navigator.clipboard.writeText(code) : Promise.reject()).then(() => {
-        cp.textContent = "Copied"; setTimeout(() => { cp.textContent = "Copy"; }, 1500);
-      }).catch(() => { cp.textContent = "Select and copy"; });
+      const box = cp.closest(".gd-pre"), code = box.querySelector("code"), status = box.querySelector("[data-copy-status]");
+      (navigator.clipboard ? navigator.clipboard.writeText(code.textContent) : Promise.reject(new Error("no clipboard"))).then(() => {
+        cp.textContent = "Copied"; status.textContent = "Copied to the clipboard.";
+        setTimeout(() => { cp.textContent = "Copy"; status.textContent = ""; }, 1500);
+      }, () => { // no clipboard access: select the text so Ctrl+C copies it
+        getSelection().selectAllChildren(code);
+        status.textContent = "Selected. Press Ctrl+C to copy.";
+      });
       return;
     }
     const j = e.target.closest("[data-gd-jump]");
