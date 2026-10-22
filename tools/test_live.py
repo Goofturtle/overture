@@ -220,12 +220,14 @@ class Signals(unittest.TestCase):
         rec["callNotes"]["u1"] = {"text": "Pilot next month"}
         upcoming = ev("u1", "2026-10-21T18:00:00+00:00", 30, [SELF, att("a@acme.com", "Ann Lee")])
         later = ev("u2", "2026-11-20T18:00:00+00:00", 30, [SELF, att("b@acme.com")])  # beyond 14 days
-        gone = ev("u0", "2026-10-19T18:00:00+00:00", 30, [SELF, att("b@acme.com")])   # already over
-        live = S.build_live([gone, upcoming, later], ME, rec, NOW)
+        gone = ev("u0", "2026-10-17T18:00:00+00:00", 30, [SELF, att("b@acme.com")])   # over more than 48 hours ago
+        just = ev("u3", "2026-10-19T18:00:00+00:00", 30, [SELF, att("c@acme.com")])   # ended yesterday: kept, so After the call works
+        live = S.build_live([gone, just, upcoming, later], ME, rec, NOW)
         for k in ("today", "invites", "people", "companies", "papers", "currentSecurityPack", "relationships", "watch"):
             self.assertIn(k, live)
         self.assertEqual(live["today"], "2026-10-20")
-        self.assertEqual([i["id"] for i in live["invites"]], ["u1"])
+        self.assertEqual([(i["id"], i["ended"]) for i in live["invites"]], [("u1", False), ("u3", True)])  # upcoming first
+        live["invites"] = [i for i in live["invites"] if i["id"] == "u1"]
         self.assertEqual(live["invites"][0]["afterNotes"], "Pilot next month")
         p = live["people"]["a@acme.com"]
         self.assertEqual((p["title"], p["note"], p["startedAt"], p["known"]), ("CTO", "Met at KubeCon", "2024-05", True))
@@ -2959,6 +2961,20 @@ class References(Fresh):
                     {"callId": "nw1", "segment": seg, "text": "a\x00b"}, {"callId": "nw1", "segment": seg, "text": "a", "extra": 1}):
             self.assertEqual(S.mentions_live(bad)[0], 400, bad)
 
+    def test_google_meet_captions_are_read_live_and_again_after_the_call(self):
+        self.fake(org_answer("partner"), org_answer("partner"))
+        st, b = S.mentions_live({"callId": "nw1", "segment": "capseg01", "offset": 0, "text": "Shea Tough: Harborline Labs called us.", "final": True,
+                                 "source": "captions"})
+        self.assertEqual(st, 200)
+        org = self.org(b, "Harborline Labs")
+        self.assertEqual(org["source"] if "source" in org else "captions", "captions")
+        self.assertEqual(S.mentions_live({"callId": "nw1", "segment": "capseg02", "text": "a", "source": "radio"})[0], 400)
+        # after the call: the whole caption transcript, read like an uploaded one
+        st, b = S.mentions_post({"callId": "nw1", "text": "Shea Tough: Harborline Labs called us.\nMarcus Bell: Talk to Rivet Analytics.", "source": "captions"})
+        self.assertEqual(st, 200)
+        self.assertEqual(S.MENTION_SOURCES["captions"], "Google Meet's captions")
+        self.assertIn("captions", S.AUTO_SOURCES)
+
     def test_finished_note_decides_at_once(self):
         f = self.fake(org_answer("partner"))
         st, b = S.mentions_live({"callId": "nw1", "segment": "seg999xyz", "offset": 0, "text": "Harborline Labs called.", "final": True})
@@ -4297,7 +4313,9 @@ class ExtensionManifest(unittest.TestCase):
         self.assertEqual(m["manifest_version"], 3)
         self.assertEqual(m["permissions"], ["sidePanel"])
         self.assertEqual(m["host_permissions"], ["https://meet.google.com/*", "https://*.zoom.us/*", "http://localhost:3576/*"])
-        for k in ("content_scripts", "optional_permissions", "optional_host_permissions", "externally_connectable", "web_accessible_resources", "side_panel"):
+        # One content script, on Google Meet only: it reads Meet's captions (when CC is on) for the side panel.
+        self.assertEqual(m["content_scripts"], [{"matches": ["https://meet.google.com/*"], "js": ["captions.js"], "run_at": "document_idle"}])
+        for k in ("optional_permissions", "optional_host_permissions", "externally_connectable", "web_accessible_resources", "side_panel"):
             self.assertNotIn(k, m)
         self.assertNotIn("<all_urls>", json.dumps(m))
         csp = m["content_security_policy"]["extension_pages"]

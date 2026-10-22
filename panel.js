@@ -121,6 +121,8 @@
   const meetilyOn = () => LIVE_MODE && !!(window.MoabSettings && window.MoabSettings.get().research.meetily);
   const mt = { st: null, timer: null, lines: -1 };
   function listenLine() {
+    const cap = captionsLine(); // Google Meet's captions come first: they need nothing else installed
+    if (cap) return cap;
     const s = mt.st;
     if (meetilyOn() && s) {
       if (s.listening) return '<p class="p-listen on"><span class="live-dot" aria-hidden="true"></span>Listening via Meetily' + (s.lines ? ' · <span class="num">' + esc(plural(s.lines, "line")) + "</span>" : "") + "</p>";
@@ -347,32 +349,89 @@
   // Notes, read as you type: only the new text goes to MOAB's own server (500 ms after you stop typing); saving the note finishes it.
   // The server reads finished sentences as they come; a 1.5 s pause reads the rest, and saving the note ends it. Whatever the note
   // no longer says ("John Sm" once it reads "John Smith") is taken back, so the draft is kept when the panel redraws (draft).
-  const live = { seg: "", sent: "", timer: null, idle: null, busy: false, next: null, paused: "", draft: "" };
+  const live = { seg: "", sent: "", timer: null, idle: null, busy: false, next: null, paused: "", draft: "", source: "live" };
   const newSeg = () => (Math.random().toString(36).slice(2, 10) + Date.now().toString(36)).replace(/[^a-z0-9]/g, "").slice(0, 32);
-  async function sendLive(text, final, pause) {
+  // st: whose text this is: `live` (your note) or `cc` (Google Meet's captions); each keeps its own place in the text.
+  async function sendLive(text, final, pause, st) {
+    st = st || live;
     if (!LIVE_MODE || !state.callId || text.length > 8000 || !autoLookup()) return; // Settings > Mentions: automatic look-up can be off
-    if (live.busy) { live.next = [text, final, pause]; return; }
-    if (!live.seg) { live.seg = newSeg(); live.sent = ""; }
+    if (st.busy) { st.next = [text, final, pause]; return; }
+    if (!st.seg) { st.seg = newSeg(); st.sent = ""; }
     let off = 0;
-    while (off < live.sent.length && off < text.length && live.sent[off] === text[off]) off++;
+    while (off < st.sent.length && off < text.length && st.sent[off] === text[off]) off++;
     const part = text.slice(off);
-    if (!part && !final && !(pause && live.paused !== text)) return;
-    if (pause) live.paused = text;
-    live.busy = true;
-    const id = state.callId, seg = live.seg;
+    if (!part && !final && !(pause && st.paused !== text)) return;
+    if (pause) st.paused = text;
+    st.busy = true;
+    const id = state.callId, seg = st.seg;
     try {
-      const j = await window.C.postJson("/api/mentions/live", { callId: id, segment: seg, offset: off, text: part.slice(0, 4000), final: !!final, pause: !!pause }, 15000);
-      live.sent = final ? "" : text;
-      if (final && live.seg === seg) live.seg = "";
+      const j = await window.C.postJson("/api/mentions/live", { callId: id, segment: seg, offset: off, text: part.slice(0, 4000), final: !!final, pause: !!pause,
+        source: st.source }, 15000);
+      st.sent = final ? "" : text;
+      if (final && st.seg === seg) st.seg = "";
       applyMentions(id, j);
-      if (j.found && id === state.callId) announce(plural(j.found, "new mention") + " found in your note.");
+      if (j.found && id === state.callId) announce(plural(j.found, "new mention") + (st === live ? " found in your note." : " heard on the call."));
     } catch (e) {
       // the server lost the note (it restarted): send it all again, once
-      if (e.message === "resend" && off) { live.seg = ""; live.sent = ""; live.paused = ""; if (!live.next) live.next = [text, final, pause]; }
+      if (e.message === "resend" && off) { st.seg = ""; st.sent = ""; st.paused = ""; if (!st.next) st.next = [text, final, pause]; }
     }
-    live.busy = false;
-    if (live.next) { const [t, f, p] = live.next; live.next = null; sendLive(t, f, p); }
+    st.busy = false;
+    if (st.next) { const [t, f, p] = st.next; st.next = null; sendLive(t, f, p, st); }
   }
+
+  // ---------- Google Meet's captions: MOAB's Chrome extension reads them while CC is on ----------
+  // Each finished line ("Name: words") is read for people and companies as it comes, like a note you type. When you leave the
+  // call (or it's past its end time), the whole caption transcript is read once more for After the call. The transcript stays in
+  // this panel: MOAB's server keeps only who and what was mentioned, with one sentence each.
+  const cc = { seg: "", sent: "", busy: false, next: null, paused: "", source: "captions", lines: [], segStart: 0, idle: null, lastAt: 0, posted: false };
+  const ccText = () => cc.lines.slice(cc.segStart).join("\n");
+  window.addEventListener("message", (e) => {
+    // Only the extension's side panel frames this page (the server's frame-ancestors says so), and it is our parent.
+    if (e.source !== window.parent || !/^chrome-extension:\/\//.test(e.origin) || !e.data || !LIVE_MODE) return;
+    if (e.data.type === "moab-captions" && Array.isArray(e.data.lines)) captionLines(e.data.lines);
+    if (e.data.type === "moab-call-ended") captionsDone("left");
+  });
+  function captionLines(lines) {
+    const add = lines.filter((l) => typeof l === "string" && l.trim()).map((l) => l.trim().slice(0, 600)).slice(0, 50);
+    if (!add.length || !state.callId) return;
+    const before = ccText();
+    if (before && before.length + add.join("\n").length > 6000) { sendLive(before, true, false, cc); cc.segStart = cc.lines.length; } // a new part every ~6,000 letters
+    cc.lines.push(...add);
+    if (cc.lines.length > 20000) cc.lines.splice(0, cc.lines.length - 20000);
+    cc.lastAt = Date.now();
+    cc.posted = false;
+    sendLive(ccText(), false, false, cc);
+    clearTimeout(cc.idle);
+    cc.idle = setTimeout(() => sendLive(ccText(), false, true, cc), 1500); // a pause reads the last sentence too
+    refreshListen();
+  }
+  // The call is over: read the whole caption transcript once, the same way an uploaded transcript is read.
+  async function captionsDone(why) {
+    if (cc.posted || !cc.lines.length || !state.callId || !LIVE_MODE) return;
+    cc.posted = true;
+    const id = state.callId;
+    sendLive(ccText(), true, false, cc);
+    try {
+      const j = await window.C.postJson("/api/mentions", { callId: id, text: cc.lines.join("\n").slice(0, 900000), source: "captions" }, 60000);
+      applyMentions(id, j);
+      announce((why === "left" ? "Call ended. " : "") + "MOAB read the whole caption transcript for After the call.");
+    } catch (e) { cc.posted = false; announce("Couldn't read the call's captions: " + e.message); }
+    refreshListen();
+  }
+  // Past the call's end time and no captions for 2 minutes: treat it as over (in case leaving the call wasn't seen).
+  setInterval(() => {
+    const inv = state.callId && window.C.inviteById(state.callId);
+    if (inv && inv.end && cc.lines.length && !cc.posted && Date.now() > Date.parse(inv.end) && Date.now() - cc.lastAt > 120000) captionsDone("time");
+  }, 30000);
+  function captionsLine() {
+    if (!LIVE_MODE) return "";
+    if (!cc.lines.length) {
+      return qs.get("meet") ? '<p class="p-listen"><span class="live-dot off" aria-hidden="true"></span>Turn on captions (CC) in Meet and MOAB finds who and what is mentioned. Let everyone know you\'re taking AI notes.</p>' : "";
+    }
+    return '<p class="p-listen on"><span class="live-dot" aria-hidden="true"></span>Reading Meet captions · <span class="num">' + esc(plural(cc.lines.length, "line")) + "</span>"
+      + (cc.posted ? " · read for After the call" : ' · <button type="button" class="link-btn" data-cc-done>Call over? Find everyone mentioned</button>') + "</p>";
+  }
+  document.addEventListener("click", (e) => { if (e.target.closest("[data-cc-done]")) captionsDone("button"); });
   document.addEventListener("input", (e) => {
     if (e.target.id !== "noteText" || !LIVE_MODE) return;
     live.draft = e.target.value;

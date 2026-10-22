@@ -687,17 +687,22 @@ def same_org(d1, d2, records):
     return d1 == d2 or company_for_domain(d1, records) == company_for_domain(d2, records)
 
 
+RECENT_HOURS = 48  # a call stays on the list this long after it ends, marked ended, so After the call still works
+
+
 def upcoming_invites(events, me_email, records, now):
-    """The calls MOAB preps: the next DAYS_AHEAD days, with ids made unique."""
+    """The calls MOAB preps: the next DAYS_AHEAD days, plus calls that ended in the last RECENT_HOURS (ended: true), with
+    ids made unique."""
     invites = []
     for ev in events:
         start, end = _event_times(ev)
-        if not start or end <= now or start > now + timedelta(days=DAYS_AHEAD):
+        if not start or end <= now - timedelta(hours=RECENT_HOURS) or start > now + timedelta(days=DAYS_AHEAD):
             continue
         inv = event_to_invite(ev, me_email, records)
         if inv:
+            inv["ended"] = end <= now
             invites.append(inv)
-    invites.sort(key=lambda i: i["start"])
+    invites.sort(key=lambda i: (bool(i.get("ended")), i["start"]))  # upcoming first, then the ones that just ended
     seen_ids = set()
     for inv in invites:  # recurring events can repeat an id across copies; keep ids unique for links
         base, n = inv["id"], 2
@@ -3560,8 +3565,9 @@ QUOTE_CHARS = 240
 GONG_MATCH_HOURS = 3               # a Gong recording within 3 hours of the calendar call is that call
 CONTACT_TO_COMPANY = 279           # HubSpot's default "contact to company" association type id (associations docs)
 MENTION_SOURCES = {"upload": "your transcript", "paste": "the pasted transcript", "notes": "your call notes", "gong": "Gong's transcript",
-                   "live": "your notes during the call", "meetily": "Meetily's live transcript", "granola": "Granola's transcript"}
-POST_SOURCES = ("upload", "paste", "notes", "gong")   # what POST /api/mentions takes; live, Meetily and Granola come from the server itself
+                   "live": "your notes during the call", "meetily": "Meetily's live transcript", "granola": "Granola's transcript",
+                   "captions": "Google Meet's captions"}
+POST_SOURCES = ("upload", "paste", "notes", "gong", "captions")  # what POST /api/mentions takes; live, Meetily and Granola come from the server itself
 
 _TS = r"(?:\d{1,2}:)?\d{1,2}:\d{2}(?:[.,]\d{1,3})?"
 CUE_RE = re.compile(r"^\s*(" + _TS + r")\s*-->\s*(" + _TS + r")")
@@ -5034,7 +5040,7 @@ def queue_mention(call_id, block, it, forced=False):
 
 WEB_OFF_NOTE = "Web research is off (Settings > Research sources and privacy), so MOAB didn't look it up on the web."
 AUTO_OFF_NOTE = "Automatic look-up is off (Settings > Mentions and connections). Press Look up on the web to look it up."
-AUTO_SOURCES = ("live", "meetily")   # found while the call runs: looked up on their own only with automatic look-up on
+AUTO_SOURCES = ("live", "meetily", "captions")   # found while the call runs: looked up on their own only with automatic look-up on
 
 
 def lookup_blocker(block, auto=False, records=None):
@@ -5237,7 +5243,7 @@ def clean_mentions_post(body):
         raise Invalid("callId doesn't look right")
     source = body.get("source", "upload")
     if source not in POST_SOURCES:
-        raise Invalid("source must be upload, paste, notes or gong")
+        raise Invalid("source must be upload, paste, notes, gong or captions")
     fname = _str(body, "filename", 200)
     if fname and not fname.lower().endswith(TRANSCRIPT_EXTS):
         raise Invalid("Use a .vtt, .srt or .txt transcript from Zoom or Google Meet.")
@@ -5609,7 +5615,9 @@ LIVE_SENT_END_RE = re.compile(r"[.!?…]+[\"'”’)]*(?=\s|$)")
 
 
 def clean_live(body):
-    _only(body, {"callId", "segment", "offset", "text", "final", "pause"})
+    _only(body, {"callId", "segment", "offset", "text", "final", "pause", "source"})
+    if body.get("source", "live") not in ("live", "captions"):
+        raise Invalid("source must be live or captions")
     cid = _str(body, "callId", 200, True)
     seg = _str(body, "segment", 32, True)
     if not CALLID_RE.match(cid) or not SEGMENT_RE.match(seg):
@@ -5638,6 +5646,7 @@ def mentions_live(body, now=None):
         return 403, {"error": "Automatic look-up is off in Settings > Mentions and connections."}
     try:
         cid, seg, off, text, final, pause = clean_live(body)
+        src = "captions" if body.get("source") == "captions" else "live"  # Google Meet's captions, read by the Chrome extension
         t = _time.time()
         with LIVE_LOCK:
             for k in [k for k, v in LIVE_SEGMENTS.items() if t - v["at"] > LIVE_TTL]:
@@ -5673,7 +5682,7 @@ def mentions_live(body, now=None):
             more = read(full)
             present |= {x["key"] for x in more[0] + more[1]}
         del ready
-        block, new, go, wait, new_o, unqueue = save_mentions(cid, ctx, found, "live", orgs, bump=False, drop=mine - present)
+        block, new, go, wait, new_o, unqueue = save_mentions(cid, ctx, found, src, orgs, bump=False, drop=mine - present)
         mine = (mine & present) | {x["key"] for x in new + new_o}
         if not final:
             with LIVE_LOCK:

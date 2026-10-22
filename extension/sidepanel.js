@@ -52,6 +52,18 @@ async function refresh() {
   if (src !== shown) { shown = src; frame.src = src; } // a new meeting in this tab: the panel opens its call
 }
 
+// Google Meet's captions (captions.js in the Meet tab) go to the panel in the frame, only from the meeting the panel is showing.
+if (chrome.runtime && chrome.runtime.onMessage) chrome.runtime.onMessage.addListener((msg, sender) => {
+  if (!msg || !sender.tab || frame.hidden || !shown || !frame.contentWindow) return;
+  const meet = meetingParams(sender.tab.url || "").meet;
+  if (!meet || new URL(shown).searchParams.get("meet") !== meet) return;
+  if (msg.type === "moab-captions" && Array.isArray(msg.lines)) {
+    frame.contentWindow.postMessage({ type: "moab-captions", lines: msg.lines.slice(0, 50).map((l) => String(l).slice(0, 600)) }, MOAB);
+  } else if (msg.type === "moab-call-ended") {
+    frame.contentWindow.postMessage({ type: "moab-call-ended" }, MOAB);
+  }
+});
+
 document.getElementById("retry").addEventListener("click", refresh);
 chrome.tabs.onActivated.addListener(refresh);
 chrome.tabs.onUpdated.addListener((tabId, info) => { if (info.url) refresh(); });

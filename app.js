@@ -282,7 +282,7 @@
     });
     if (!items.length) return "";
     const done = items.filter((i) => i.done).length;
-    const waiting = D.invites.filter((inv) => !(runs[inv.id] && runs[inv.id].ctx && runs[inv.id].ctx.done));
+    const waiting = D.invites.filter((inv) => !inv.ended && !(runs[inv.id] && runs[inv.id].ctx && runs[inv.id].ctx.done));
     return '<section class="home-block widget span-2 h-todos" aria-labelledby="beforeH"><div class="widget-head"><h2 id="beforeH">Before your calls</h2><span class="widget-count done-count">' + done + " of " + items.length + " done</span>"
       + '<span class="grow"></span>' + srcTag(SRC.records) + "</div>"
       + items.map((i) => '<label class="todo-item"><input type="checkbox" data-call="' + esc(i.inv.id) + '" data-todo="' + esc(i.t.text) + '"' + (i.done ? " checked" : "") + '><span class="t">' + esc(i.t.text)
@@ -373,7 +373,7 @@
   function heroWeb(next, later) {
     const w = splitWhen(next.when), list = alerts(), a = list.find((x) => !readAlerts.has(x.id)) || list[0];
     const co = later[0] ? later[0].company : null, cc = co ? D.companies[co] || {} : {};
-    const ready = D.invites.filter((i) => prepState(i.id) === "done").length, total = D.invites.length;
+    const ready = D.invites.filter((i) => !i.ended && prepState(i.id) === "done").length, total = D.invites.filter((i) => !i.ended).length;
     const first = (n) => esc(String(n).split(" ")[0]);
     const who = (inv) => inv.attendees.length ? first(inv.attendees[0].name) + (inv.attendees.length > 1 ? " +" + (inv.attendees.length - 1) : "") : "";
     const label = (tone, text) => '<span class="hw-label ' + tone + '"><i aria-hidden="true"></i>' + esc(text) + "</span>";
@@ -689,7 +689,7 @@
   function startHead(inv) {
     const w = splitWhen(inv.when);
     return '<header><p class="eyebrow">' + esc(w.day + " " + w.month + " " + w.date + " · " + w.time) + "</p>"
-      + '<h1 tabindex="-1">' + esc(inv.company) + '</h1><p class="sub">' + esc(inv.title) + "</p>"
+      + '<h1 tabindex="-1">' + esc(inv.company) + (inv.ended ? ' <span class="pill tag-gray">Ended</span>' : "") + '</h1><p class="sub">' + esc(inv.title) + "</p>"
       + '<ul class="faces" aria-label="Invited">' + inv.attendees.map((a) => "<li>" + avatar(a, "sm") + esc(a.name) + "</li>").join("") + "</ul></header>";
   }
   function inputsText(id) {
@@ -757,7 +757,7 @@
     const bp = C.prefs() ? C.prefs().brief : { sections: [], length: "full" }, short = bp.length === "short";
     const org = C.orgInfo(inv.company); // what MOAB's research found about the company (profile.js draws it)
     const detail = c && /: /.test(c.status) ? '<span class="muted">' + esc(c.status.replace(/^[^:]*: /, "")) + "</span>" : "";
-    let html = '<header class="brief-head"><div class="title-row"><h1 tabindex="-1">' + esc(inv.company) + "</h1>"
+    let html = '<header class="brief-head"><div class="title-row"><h1 tabindex="-1">' + esc(inv.company) + "</h1>" + (inv.ended ? '<span class="pill tag-gray">Ended</span>' : "")
       + (top.score > 0 ? '<span class="pill accent">Best fit: ' + esc(top.name) + "</span>" : "") + C.priorityBadge(inv.company) + "</div>"
       + '<dl class="props"><dt>When</dt><dd>' + esc(w.day + " " + w.month + " " + w.date + " · " + w.time) + "</dd>"
       + '<dt>Kind</dt><dd><span class="pill">' + esc(kindOf(inv)) + "</span></dd>"
