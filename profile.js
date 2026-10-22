@@ -225,7 +225,7 @@
       + (actions ? '<div class="pf-actions">' + actions + "</div>" : "") + "</header>";
     const state = pr ? (info.status === "pending" ? stateHtml("pending", "", w.name) : "") : stateHtml(info.status, info.note, w.name);
     const none = !pr && !state ? '<p class="pf-state">' + ic("circleAlert") + "<span>MOAB has no public work profile for " + esc(first(w.name)) + " yet. What your calendar and records know is under With you.</span></p>" : "";
-    const main = state + none + (pr ? personSections(email, { idp: "pf", extra: { connections: opts.connections || "" } }) : opts.connections || "");
+    const main = (pr ? askBox(email, "pfask") : "") + state + none + (pr ? personSections(email, { idp: "pf", extra: { connections: opts.connections || "" } }) : opts.connections || "");
     const sideOpts = { idp: "pfs", level: 2, cls: "pf-side-sec" };
     const side = section(sideOpts, "with", "With you", withYou(email, opts)) + section(sideOpts, "glance", "At a glance", glance(email, opts));
     h += '<div class="pf-body"><div class="pf-main">' + main + "</div>"
@@ -243,7 +243,7 @@
       + '<header class="pp-head">' + avatar({ name: w.name, email }, "lg") + '<div class="pp-head-t"><h2 class="pp-name" tabindex="-1">' + esc(w.name) + "</h2>"
       + ([w.title, w.companyLabel].filter(Boolean).length ? '<p class="pp-sub">' + esc([w.title, w.companyLabel].filter(Boolean).join(" · ")) + "</p>" : "")
       + (RELATION[r.relationship] ? '<p class="pp-pills"><span class="pill tag-blue">' + esc(RELATION[r.relationship]) + "</span></p>" : "") + "</div></header>"
-      + metaHtml(pr, r) + (opts.top || "");
+      + metaHtml(pr, r) + (opts.top || "") + (pr ? askBox(email, "ppask") : "");
     h += pr ? (info.status === "pending" ? stateHtml("pending", "", w.name) : "") : stateHtml(info.status, info.note, w.name);
     const fold = { fold: true, open: ["summary", "now", "past", "forcall"] };
     h += pr ? personSections(email, Object.assign({}, fold, { extra: { connections: section(fold, "conn", "Connections", conn, g.nodes.length - 1) } }))
@@ -490,6 +490,35 @@
     slot.innerHTML = open ? nodeCard(g, btn.dataset.pm, opts) : "";
   }
 
+  // ---------- ask about this person: a quick answer from MOAB's saved research, with its sources ----------
+  function askBox(email, idp) {
+    const w = who(email), id = (idp || "ask") + "-" + C.personKey(email);
+    return '<div class="pf-ask"><form class="pf-ask-form" data-ask-person="' + esc(C.personKey(email)) + '"><label class="sr-only" for="' + id + '">Ask about ' + esc(w.name) + "</label>"
+      + ic("sparkle", "pf-ask-ic") + '<input id="' + id + '" class="pf-ask-in" type="text" maxlength="500" autocomplete="off" placeholder="' + esc("Ask about " + first(w.name) + ": past jobs, who they work with, what to bring up…") + '">'
+      + '<button type="submit" class="btn primary sm">Ask</button></form><div class="pf-ask-out" aria-live="polite"></div></div>';
+  }
+  // [2] in an answer becomes the same numbered source chip the profile uses.
+  function answerHtml(text, sources) {
+    const list = (sources || []).map((s) => { const href = C.safeHref(s.url); return href ? { href, label: s.label || "", host: new URL(href).hostname.replace(/^www\./, "") } : null; });
+    return esc(text).replace(/\[(\d{1,2})\]/g, (m, d) => { const i = +d - 1; return list[i] ? cites([i], list) : ""; });
+  }
+  document.addEventListener("submit", async (e) => {
+    const f = e.target.closest("[data-ask-person]");
+    if (!f) return;
+    e.preventDefault();
+    const input = f.querySelector("input"), q = input.value.trim(), out = f.parentElement.querySelector(".pf-ask-out"), btn = f.querySelector("button");
+    if (!q) { input.focus(); return; }
+    if (DEMO) { out.innerHTML = '<p class="pf-ask-note">In the demo, questions need MOAB running with your Claude key.</p>'; return; }
+    btn.disabled = true;
+    out.innerHTML = '<p class="pf-ask-note" role="status">Thinking…</p>';
+    try {
+      const j = await C.postJson("/api/ask", { question: q, person: C.emailForKey(f.dataset.askPerson) }, 25000);
+      out.innerHTML = '<p class="pf-ask-q">' + esc(q) + '</p><p class="pf-ask-a">' + answerHtml(j.text || "", j.sources) + "</p>";
+    } catch (err) {
+      out.innerHTML = '<p class="pf-ask-note" role="alert">' + esc(/no-key/.test(err.message) ? "Add your Claude key in Settings to ask questions." : err.message) + "</p>";
+    } finally { btn.disabled = false; }
+  });
+
   // ---------- past to present: one person's career as a timeline, with who they're connected to at each stop ----------
   // Stops run oldest to newest: past jobs (the profile lists them newest first), their job now, then each call with you.
   // People a public page names with them (profile.people) hang under the stop whose company they share; the rest are listed after.
@@ -575,6 +604,7 @@
       + state + '<div class="tl-scroll" tabindex="0" role="region" aria-label="' + esc(w.name + "'s career, oldest first") + '"><ol class="tl-track" role="list">'
       + stops.map((s) => tlStop(s, opts)).join("") + "</ol></div>"
       + (loose.length ? '<div class="tl-loose"><p class="tl-d-kicker">Also connected through work</p><ul class="tl-conn tl-conn-row" role="list">' + loose.map(tlPersonChip).join("") + "</ul></div>" : "")
+      + (pr ? '<div class="tl-ask">' + askBox(email, "tlask") + "</div>" : "")
       + '<p class="sr-only" role="status" data-tl-said></p><div class="tl-detail">' + tlDetail(model, "now", opts) + "</div>"
       + (pr && pr.sources.length ? '<details class="tl-srcs"><summary>' + esc(plural(pr.sources.length, "source")) + "</summary>" + sourcesList(pr.sources) + "</details>" : "")
       + (DEMO ? '<p class="pf-foot">Sample data: made up for the demo.</p>' : "") + "</div>";

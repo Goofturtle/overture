@@ -989,8 +989,10 @@
       + (x.kind === "company" && x.label && x.label !== "mentioned" && x.label.toLowerCase() !== type.toLowerCase() ?'<span class="xp-label">' + esc(xpCap(x.label)) + "</span>" : x.title ? '<span class="xp-label">' + esc(x.title) + "</span>" : "")
       + (x.found && XP_HOW[x.found.how] ? '<span class="pill ' + XP_HOW[x.found.how] + '">' + esc(x.found.how) + "</span>" : "")
       + (MODE === "demo" ? '<span class="src sample">Sample</span>' : "") + "</p>";
+    // What the company is (a sourced definition), above how it's connected.
+    if (x.about && x.about.text && refs(x.about.sources)) h += '<p class="xp-h">What it is</p><p class="xp-about">' + esc(x.about.text) + refs(x.about.sources) + "</p>";
     const what = (x.explanation || []).filter((s) => s && s.text && refs(s.sources));
-    if (what.length) h += '<div class="xp-what">' + what.map((s) => "<p>" + esc(s.text) + refs(s.sources) + "</p>").join("") + "</div>";
+    if (what.length) h += (x.about && x.about.text ? '<p class="xp-h">How it connects</p>' : "") + '<div class="xp-what">' + what.map((s) => "<p>" + esc(s.text) + refs(s.sources) + "</p>").join("") + "</div>";
     if (x.since && x.since.text && refs(x.since.sources)) h += '<p class="xp-since">' + ic("clock") + "<span>Since " + esc(String(x.since.text).replace(/^since\s+/i, "")) + refs(x.since.sources) + "</span></p>";
     if (x.said && x.said.text) {
       h += '<p class="xp-h">Said on the call</p><blockquote class="xp-quote"><span>“' + esc(x.said.text) + "”</span>"

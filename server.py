@@ -1604,6 +1604,47 @@ def company_facts(c):
             "notes": c.get("notes"), "history": (c.get("history") or [])[-5:], "sources": c.get("src") or "MOAB records"}
 
 
+PERSON_ASK_SYSTEM = (
+    "You answer a salesperson's question about one person before or during a call. Use only the facts in the JSON: MOAB's "
+    "research on them (from public pages, each fact tagged with its source number like [2]), their company and their calls. "
+    "Answer in 1 to 3 short plain sentences, no markdown. After each fact you use, put its source number in square brackets, "
+    "like [2]. If the facts don't answer it, say in one sentence that MOAB's research doesn't show that. Never guess, and never "
+    "add personal details (family, age, health, home, contact details)."
+)
+
+
+def person_context(email, records):
+    """One guest for a quick question: their research with numbered sources (1 = the first source, as the page numbers them),
+    their company's research and their calls. From MOAB's saved records only: no web search, so it answers in seconds."""
+    rec = (records.get("people") or {}).get(email) or {}
+    prof = profile_view(rec.get("profile"), "person")
+    with RQ_LOCK:
+        m = dict(RQ["meta"].get(email) or {})
+    n = lambda src: "".join("[" + str(i + 1) + "]" for i in src)  # noqa: E731
+    ctx = {"person": {"name": m.get("name") or (prof or {}).get("name", ""), "title": rec.get("title", ""), "team": rec.get("team", ""),
+                      "relationship": rec.get("relationship", ""), "company": m.get("company") or name_from_domain(domain_of(email))}}
+    if prof:
+        r = ctx["research"] = {}
+        if prof.get("summary"):
+            r["summary"] = prof["summary"]["text"] + " " + n(prof["summary"]["src"])
+        for k in ("now", "education", "work", "forCall"):
+            if prof.get(k):
+                r[k] = [e["text"] + " " + n(e["src"]) for e in prof[k]]
+        if prof.get("past"):
+            r["past"] = [{"role": e["role"], "org": e["org"], "when": e["when"] + " " + n(e["src"]), "points": [x["text"] + " " + n(x["src"]) for x in e["points"]]}
+                         for e in prof["past"]]
+        if prof.get("people"):
+            r["connectedWith"] = [p["name"] + (" (" + ", ".join(x for x in (p["role"], p["org"]) if x) + ")" if p["role"] or p["org"] else "")
+                                  + ": " + p["how"] + " " + n(p["src"]) for p in prof["people"]]
+        r["sources"] = {str(i + 1): s["label"] for i, s in enumerate(prof["sources"])}
+    org = ((records.get("orgs") or {}).get(domain_of(email)) or {}).get("profile")
+    if profile_view(org, "org"):
+        ctx["company"] = profile_for_ai(profile_view(org, "org"))  # background on the company: not numbered, so not cited
+    if m.get("start"):
+        ctx["nextCallWithYou"] = m.get("start")
+    return json.dumps(ctx, ensure_ascii=False)[:30000], (prof or {}).get("sources") or []
+
+
 def answer_question(body):
     if not isinstance(body, dict):
         return 400, {"error": "bad request"}
@@ -1612,8 +1653,17 @@ def answer_question(body):
         return 400, {"error": "ask a question of up to 500 characters"}
     if cid is not None and (not isinstance(cid, str) or not CALLID_RE.match(cid)):
         return 400, {"error": "bad callId"}
+    person = body.get("person")
+    if person is not None and (not isinstance(person, str) or not EMAIL_RE.match(person.strip().lower())):
+        return 400, {"error": "bad person"}
     if not claude_on():
         return 503, {"error": "no-key"}
+    if person:  # a question about one guest: their saved research only, short answer, cited
+        ctx, sources = person_context(person.strip().lower(), load_records())
+        code, out = claude_text(PERSON_ASK_SYSTEM, "Facts (JSON):\n" + ctx + "\n\nQuestion: " + q.strip(), 400, 20)
+        if code == 200:
+            out.update(source="claude", sources=[{"url": s["url"], "label": s["label"]} for s in sources])
+        return code, out
     live, records = None, load_records()
     if token_info():
         try:
@@ -4342,6 +4392,8 @@ ORG_SYSTEM = (
     '"explanation": [{"text": "one plain sentence on what the relation is: what B does with or for A, for which team or product, '
     'and since when if a source says", "sources": [1]}], '
     '"since": {"text": "when it started if a source says, like 2023 or March 2024, else empty", "sources": [1]}, '
+    '"about": {"text": "one plain sentence defining Company B: what it is and what it does, from its own site or a news page, '
+    'even when the relation is unknown", "sources": [1]}, '
     '"sources": [{"url": "https://...", "label": "short name of the page", "date": "YYYY-MM-DD, YYYY-MM or YYYY, or empty", '
     '"quote": "up to 25 words copied from the page that show the relation"}]}\n'
     "Write only what the sources say. Give 1 to 3 explanation sentences in plain words, each listing the numbers of the sources "
@@ -4368,8 +4420,9 @@ def org_request(a_name, a_domain, b_name, b_domain):
 def clean_org_relation(obj, seen):
     """Claude's answer -> a sourced relation, or unknown. Unsourced, unsure or off-list answers are unknown."""
     out = {"type": "unknown", "detail": "", "said": "", "source": "web", "sources": [], "confidence": "", "side": "them", "speaker": "", "time": ""}
-    if not isinstance(obj, dict) or obj.get("relation") not in ORG_RELATIONS or obj.get("relation") == "unknown" or obj.get("confidence") not in ("high", "medium"):
+    if not isinstance(obj, dict):
         return out
+    known = obj.get("relation") in ORG_RELATIONS and obj.get("relation") != "unknown" and obj.get("confidence") in ("high", "medium")
     srcs = []
     for s in obj.get("sources") if isinstance(obj.get("sources"), list) else []:
         url = safe_url(s.get("url")) if isinstance(s, dict) else ""
@@ -4381,10 +4434,16 @@ def clean_org_relation(obj, seen):
             break
     if not srcs:
         return out
+    srcs = clean_evidence(obj.get("sources"), srcs, seen)
+    # What Company B is (shown when you click it), kept only when a kept source says it: also when the relation is unknown.
+    about = (clean_explanation([obj["about"]], obj.get("sources"), srcs, 1, 240) or [None])[0] if isinstance(obj.get("about"), dict) else None
+    if about and len(about["text"]) > 12 and not PHONE_RE.search(about["text"]):
+        out.update(about=about, sources=srcs)
+    if not known:
+        return out
     detail = clean_text(obj.get("detail"), 80)
     if "@" in detail or PHONE_RE.search(detail):
         detail = ""
-    srcs = clean_evidence(obj.get("sources"), srcs, seen)
     out.update(type=obj["relation"], detail=detail, sources=srcs, confidence=obj["confidence"],
                explanation=clean_explanation(obj.get("explanation"), obj.get("sources"), srcs), since=clean_since(obj.get("since"), obj.get("sources"), srcs))
     return out
@@ -4662,10 +4721,12 @@ def explain_view(kind, it, block):
             if rel.get("source") == "said" and rel.get("said") else None
         since = rel.get("since") if isinstance(rel.get("since"), dict) else None
         since = (_explanation_view([since], remap) or [None])[0] if since else None
+        about = rel.get("about") if isinstance(rel.get("about"), dict) else None
+        about = (_explanation_view([about], remap) or [None])[0] if about else None
         how = "Said on the call" if rel.get("source") == "said" else "Found on the web" if ev else ""
         return {"kind": "company", "name": clean_text(it.get("name"), 120), "type": t, "typeLabel": ORG_RELATIONS.get(t, "Unknown"),
                 "label": org_edge_label(rel) if rel else "mentioned", "detail": clean_text(rel.get("detail"), 80) if rel.get("detail") != "former" else "former",
-                "explanation": _explanation_view(rel.get("explanation"), remap), "since": since, "evidence": ev, "said": said,
+                "explanation": _explanation_view(rel.get("explanation"), remap), "since": since, "about": about, "evidence": ev, "said": said,
                 "mention": mention, "found": dict(found, how=how), "confidence": rel.get("confidence") if rel.get("confidence") in ("high", "medium") else ""}
     p, likely = it.get("person"), False
     if not isinstance(p, dict) and it.get("status") == "pick" and it.get("candidates"):

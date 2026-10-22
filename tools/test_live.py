@@ -3764,6 +3764,17 @@ class Explanations(Fresh):
 
     fake, post, by = MentionFlow.fake, MentionFlow.post, MentionFlow.by
 
+    def test_a_company_said_on_a_call_gets_a_sourced_definition_even_with_no_relation(self):
+        seen = {S.url_key(u): {"cited": [], "age": ""} for u in HARBOR_URLS}
+        about = {"text": "Harborline is a freight software company that builds routing tools for shippers.", "sources": [1]}
+        rel = S.clean_org_relation(dict(HARBOR_EXPLAINED, relation="unknown", about=about), seen)
+        self.assertEqual((rel["type"], rel["about"]["text"]), ("unknown", about["text"]))
+        self.assertTrue(rel["sources"])
+        found = S.clean_org_relation(dict(HARBOR_EXPLAINED, about=about), seen)
+        self.assertEqual(found["about"]["text"], about["text"])
+        unsourced = S.clean_org_relation(dict(HARBOR_EXPLAINED, about={"text": about["text"], "sources": [9]}), seen)
+        self.assertNotIn("about", unsourced)
+
     def test_only_sourced_sentences_short_quotes_and_dates_are_kept(self):
         # what the search itself showed of each page: the words of its citations and the page's date (page_age, made YYYY-MM-DD)
         seen = {S.url_key(HARBOR_URLS[0]): {"cited": [HARBOR_EXPLAINED["sources"][0]["quote"]], "age": "2026-08"},

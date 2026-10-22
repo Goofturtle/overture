@@ -367,3 +367,22 @@ a.who-chip:hover { color: var(--accent); }
   .tl-loose, .tl-detail, .tl-srcs { margin-left: 16px; margin-right: 16px; }
 }
 @media (prefers-reduced-motion: reduce) { .tl-dialog[open] { animation: none; } .tl-card, .tl-person { transition: none; } }
+
+/* ---------- ask about this person (profile.js askBox): one line to ask, the answer with its source chips ---------- */
+.pf-ask { margin: 20px 0 4px; }
+.pf-ask-form { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 12px; border: 1px solid var(--line-2); border-radius: 12px; background: var(--surface);
+  box-shadow: 0 1px 2px rgba(23, 24, 26, 0.04); transition: border-color 140ms ease, box-shadow 140ms ease; }
+.pf-ask-form:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
+.pf-ask-ic { width: 16px; height: 16px; color: var(--accent); flex: none; }
+.pf-ask-in { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: 14px; line-height: 1.5; padding: 4px 0; }
+.pf-ask-in::placeholder { color: var(--muted); }
+.pf-ask-out:empty { display: none; }
+.pf-ask-out { margin-top: 10px; padding: 12px 14px; border-radius: 12px; background: var(--accent-bg); }
+.pf-ask-q { font-size: 12.5px; font-weight: 600; line-height: 1.5; color: var(--muted); }
+.pf-ask-a { margin-top: 2px; font-size: 14px; line-height: 1.6; color: var(--ink); }
+.pf-ask-note { font-size: 13px; line-height: 1.5; color: var(--ink-2); }
+.pp .pf-ask { margin: 12px 0 4px; }
+.tl-ask { margin: 16px 24px 0; }
+.tl-ask .pf-ask { margin: 0; }
+@media (max-width: 640px) { .tl-ask { margin: 12px 16px 0; } }
+@media (prefers-reduced-motion: reduce) { .pf-ask-form { transition: none; } }

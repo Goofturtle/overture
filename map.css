@@ -234,6 +234,7 @@
 .xp-type { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .xp-label { color: var(--ink); font-weight: 500; }
 .xp-what { display: flex; flex-direction: column; gap: 4px; color: var(--ink); }
+.xp-about { color: var(--ink); }
 .xp-ref { margin-left: 2px; font-size: 10px; font-weight: 600; line-height: 1.4; color: var(--accent); vertical-align: 4px; font-variant-numeric: tabular-nums; }
 .xp-ref + .xp-ref::before { content: ","; color: var(--muted); }
 .xp-since { display: flex; align-items: center; gap: 6px; color: var(--ink-2); }
