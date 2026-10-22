@@ -613,6 +613,14 @@ class Research(Fresh):
         self.assertEqual(S.name_from_event("shea@tks.world", {"title": "Shea Thursday", "notes": "Shea October review"}), "")
         self.assertEqual(S.name_from_event("shea@tks.world", {"title": "", "notes": "Call with Shea McDonald-Ray"}), "Shea McDonald-Ray")
         self.assertEqual(S.name_from_event("shea@tks.world", {"title": "Call with Shea Kim's team", "notes": ""}), "Shea Kim")
+        self.assertEqual(S.name_from_event("shea@tks.world", {"title": "Call with Shea Kim's Backstage demo", "notes": ""}), "Shea Kim")
+
+    def test_connected_people_names_any_alphabet_and_no_family(self):
+        self.assertTrue(S.looks_like_name("José García") and S.looks_like_name("Zoë Chen") and S.looks_like_name("Ian Lockhart"))
+        self.assertFalse(S.looks_like_name("the team") or S.looks_like_name("Ian") or S.looks_like_name("Team 7 Leads"))
+        for t in ("Her brother co-founded Acme with her.", "Her father, the CEO, hired her.", "Her sister-in-law runs sales."):
+            self.assertEqual(S._profile_text(t, 260), "", t)
+        self.assertTrue(S._profile_text("Ran launches at Acme's sister company, Acme Labs.", 260))  # business words stay
 
     def test_setup_guides_use_only_markdown_the_guide_pages_can_draw(self):
         # guides.js draws headings, lists, code blocks, `code`, **bold** and links. A table or a #### heading would show as raw text.

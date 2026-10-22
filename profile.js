@@ -494,7 +494,15 @@
   // Stops run oldest to newest: past jobs (the profile lists them newest first), their job now, then each call with you.
   // People a public page names with them (profile.people) hang under the stop whose company they share; the rest are listed after.
   // Other guests on a call hang under that call.
-  const sameOrg = (a, b) => { const x = orgKey(a), y = orgKey(b); return !!x && !!y && (x === y || (Math.min(x.length, y.length) >= 3 && (x.includes(y) || y.includes(x)))); };
+  // Same company: equal names ("TKS" = "Tks"), or one name's whole words start the other's ("TKS" and "TKS NYC"). Never part of a
+  // word, so "Box" isn't "Dropbox" and "Meta" isn't "Metabase".
+  const orgWords = (s) => String(s || "").toLowerCase().replace(/\(.*?\)/g, " ").replace(/\.[a-z]{2,}$/, "").split(/[^a-z0-9]+/)
+    .filter((w) => w && !/^(the|inc|ltd|llc|gmbh|plc|corp|corporation|limited|co)$/.test(w));
+  const sameOrg = (a, b) => {
+    if (orgKey(a) && orgKey(a) === orgKey(b)) return true;
+    const x = orgWords(a), y = orgWords(b), [s, l] = x.length <= y.length ? [x, y] : [y, x];
+    return s.length > 0 && s.every((w, i) => w === l[i]);
+  };
   function careerStops(email) {
     const w = who(email), pr = w.info.profile;
     const stops = (pr ? pr.past.slice().reverse() : []).map((r, i) => ({ id: "s" + i, kind: "past", role: r.role, org: r.org, when: r.when, src: r.src, points: r.points, people: [] }));
@@ -528,7 +536,7 @@
         + (sub ? '<span class="tl-org">' + esc(sub) + "</span>" : "") + "</span>", [title, sub, s.when].filter(Boolean).join(", "));
     }
     const conn = s.people.map(tlPersonChip).join("") + (s.guests || []).map((a) => tlGuestChip(a, opts)).join("");
-    return '<li class="tl-stop tl-' + s.kind + '"><p class="tl-when">' + esc(s.when || "Date not public") + '</p><span class="tl-dot" aria-hidden="true"></span>' + card
+    return '<li class="tl-stop tl-' + s.kind + '"><p class="tl-when" title="' + esc(s.when || "Date not public") + '">' + esc(s.when || "Date not public") + '</p><span class="tl-dot" aria-hidden="true"></span>' + card
       + (conn ? '<ul class="tl-conn" role="list" aria-label="' + esc("Connected here") + '">' + conn + "</ul>" : "") + "</li>";
   }
   // The details for one stop or person, shown under the timeline when it's picked.
@@ -548,8 +556,9 @@
         + '<p class="tl-d-sub">' + esc(plural(s.call.attendees.length, "guest")) + " · " + esc(s.call.company) + "</p>"
         + '<p class="tl-d-acts">' + ctl(opts, "call", s.call.id, ic("arrowRight") + "Open brief", "btn secondary sm") + "</p>";
     }
-    const head = '<p class="tl-d-kicker">' + esc(s.when || "Date not public") + '</p><h3 class="tl-d-h">' + esc(s.role || s.org || "Role not public") + cites(s.src, sources) + "</h3>"
-      + (s.role && s.org ? '<p class="tl-d-sub">' + (s.kind === "now" && s.company ? ctl(opts, "company", s.company, esc(s.org)) : esc(s.org)) + "</p>" : "");
+    const head = '<p class="tl-d-kicker">' + esc(s.when || "Date not public") + '</p><h3 class="tl-d-h">' + esc(s.role || s.org || "Role not public") + "</h3>"
+      + (s.role && s.org || s.src.length ? '<p class="tl-d-sub">' + (s.role && s.org ? (s.kind === "now" && s.company ? ctl(opts, "company", s.company, esc(s.org)) : esc(s.org)) : "")
+        + cites(s.src, sources) + "</p>" : "");
     const body = s.points.length ? bullets(s.points, sources, "pf-list-sm") : '<p class="tl-d-note">No public details about this role.</p>';
     const org = s.kind === "now" && s.company ? orgMini(s.company, opts) : "";
     return head + body + (org ? '<div class="tl-d-org"><p class="tl-d-kicker">About ' + esc(s.org) + "</p>" + org + "</div>" : "");
@@ -559,26 +568,29 @@
     opts = opts || {};
     const model = careerStops(email), { w, pr, stops, loose } = model;
     const state = pr ? "" : stateHtml(w.info.status, w.info.note, w.name);
-    return '<div class="tl" data-tl-email-key="' + esc(C.personKey(email)) + '"><header class="tl-head">' + avatar({ name: w.name, email }, "lg")
+    return '<div class="tl"><header class="tl-head">' + avatar({ name: w.name, email }, "lg")
       + '<div class="tl-head-t"><p class="tl-kicker">Past to present</p><h2 class="tl-title" id="tlTitle" tabindex="-1">' + esc(w.name) + "</h2>"
       + ([w.title, w.companyLabel].filter(Boolean).length ? '<p class="tl-sub">' + esc([w.title, w.companyLabel].filter(Boolean).join(" at ")) + "</p>" : "") + "</div>"
       + '<div class="tl-head-acts">' + ctl(opts, "person", email, "Full profile", "btn ghost sm") + '<button type="button" class="icon-btn tl-close" data-tl-close aria-label="Close">' + ic("x") + "</button></div></header>"
       + state + '<div class="tl-scroll" tabindex="0" role="region" aria-label="' + esc(w.name + "'s career, oldest first") + '"><ol class="tl-track" role="list">'
       + stops.map((s) => tlStop(s, opts)).join("") + "</ol></div>"
       + (loose.length ? '<div class="tl-loose"><p class="tl-d-kicker">Also connected through work</p><ul class="tl-conn tl-conn-row" role="list">' + loose.map(tlPersonChip).join("") + "</ul></div>" : "")
-      + '<div class="tl-detail" aria-live="polite">' + tlDetail(model, "now", opts) + "</div>"
+      + '<p class="sr-only" role="status" data-tl-said></p><div class="tl-detail">' + tlDetail(model, "now", opts) + "</div>"
       + (pr && pr.sources.length ? '<details class="tl-srcs"><summary>' + esc(plural(pr.sources.length, "source")) + "</summary>" + sourcesList(pr.sources) + "</details>" : "")
       + (DEMO ? '<p class="pf-foot">Sample data: made up for the demo.</p>' : "") + "</div>";
   }
   // Clicks inside a drawn timeline: pick a stop or a person to see its details.
   function mountTimeline(root, email, opts) {
     const model = careerStops(email);
-    const pick = (id) => {
+    const pick = (id, say) => {
       root.querySelectorAll("[data-tl-item]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.tlItem === id)));
-      root.querySelector(".tl-detail").innerHTML = tlDetail(model, id, opts || {});
+      const d = root.querySelector(".tl-detail");
+      d.innerHTML = tlDetail(model, id, opts || {});
+      // Say only what is shown, not the whole panel; the details are right after the timeline for anyone reading on.
+      if (say) { const h = d.querySelector(".tl-d-h"); root.querySelector("[data-tl-said]").textContent = h ? "Showing " + h.textContent + " below." : ""; }
     };
     pick("now");
-    root.onclick = (e) => { const b = e.target.closest("[data-tl-item]"); if (b) pick(b.dataset.tlItem); }; // one handler, even when reopened
+    root.onclick = (e) => { const b = e.target.closest("[data-tl-item]"); if (b) pick(b.dataset.tlItem, true); }; // one handler, even when reopened
   }
   // Once the timeline is on screen: scroll the track so the newest stops (now, and your calls) are in view.
   function showLatest(root) {

@@ -70,6 +70,7 @@
 .node:hover { box-shadow: var(--card-shadow-hi); }
 /* The brief's people list also uses .person (styles.css: a grid, no side padding); on the board a person stays a padded card. */
 .node.person { display: flex; padding: 8px 14px 8px 10px; }
+.node.person + .node.person { border-top-color: rgba(23, 24, 26, 0.05); }
 .node.selected { box-shadow: 0 0 0 2px var(--accent), var(--card-shadow-hi); }
 /* One ring, not two: a focused card gets the outline; a focused card that is also selected keeps its accent ring
    and adds a soft halo outside it, instead of a second outline floating 2px off the first. */

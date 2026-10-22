@@ -304,7 +304,7 @@ a.who-chip:hover { color: var(--accent); }
 .tl-track::before { content: ""; position: absolute; left: 12px; right: 12px; top: 33px; height: 2px; border-radius: 2px;
   background: linear-gradient(90deg, var(--line-2), var(--accent-line) 70%, var(--accent)); }
 .tl-stop { position: relative; display: flex; flex-direction: column; align-items: flex-start; width: 212px; flex: none; }
-.tl-when { height: 20px; font-size: 12px; font-weight: 600; line-height: 1.5; color: var(--muted); white-space: nowrap; }
+.tl-when { height: 20px; max-width: 100%; font-size: 12px; font-weight: 600; line-height: 1.5; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tl-now .tl-when, .tl-call .tl-when { color: var(--accent); }
 .tl-dot { position: relative; z-index: 1; width: 12px; height: 12px; margin: 8px 0 12px 6px; border-radius: 50%; background: var(--surface); box-shadow: 0 0 0 2px var(--line-2); }
 .tl-now .tl-dot { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg), 0 0 0 4px var(--accent-line); }

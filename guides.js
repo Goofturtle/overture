@@ -121,7 +121,7 @@
     };
     if (cache[name]) { paint(cache[name]); return g.title; }
     el.innerHTML = crumbs(g.title) + '<div class="gd-page"><p class="gd-p" role="status">Loading the guide…</p></div>';
-    const still = () => (location.hash.split("/").filter(Boolean)[1] || "") === name; // only draw if you're still on this guide
+    const still = () => (location.hash.slice(2).split("/")[1] || "") === name; // "#/guides/<name>[/]": only draw if you're still on this guide
     fetch("docs/" + g.file).then((r) => (r.ok ? r.text() : Promise.reject(new Error("not sent")))).then((md) => {
       cache[name] = md;
       if (!still()) return;

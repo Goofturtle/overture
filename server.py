@@ -486,7 +486,11 @@ def name_from_event(email, inv):
         return ""
     text = "\n".join([str(inv.get("title") or ""), str(inv.get("notes") or "")])[:4000]
     for m in re.finditer(r"(?i:\b" + re.escape(first) + r")[ \t]+" + SURNAME + r"(?:[ \t]+" + SURNAME + r")?\b", text):
-        words = [re.sub(r"['’]s$", "", w) for w in m.groups() if w]  # "Shea Kim's team" -> Shea Kim
+        words = []
+        for w in (w for w in m.groups() if w):  # "Shea Kim's team" / "Shea Kim's Backstage demo" -> Shea Kim: a possessive ends the name
+            words.append(re.sub(r"['’]s$", "", w))
+            if words[-1] != w:
+                break
         while words and words[-1].lower() in NAME_STOP:
             words.pop()
         if words and words[0].lower() not in NAME_STOP:
@@ -2448,9 +2452,9 @@ def merge_research(email, result, now=None):
                 rec["found"] = "auto"
             rec["lookup"] = result.get("status", "unknown")
             rec["confidence"] = result.get("confidence", "") if result.get("status") == "done" else ""
-        rec["foundAt"] = now.replace(microsecond=0).isoformat()
+            rec["foundAt"] = now.replace(microsecond=0).isoformat()  # (a confirmed person's "found" date, and its alert, stay as they were)
         if "profile" in result:  # deep research ran (research_person): its profile, and that it ran, so it isn't redone for 30 days
-            rec["deepAt"], rec["searched"] = rec["foundAt"], int(result.get("searched") or 0)
+            rec["deepAt"], rec["searched"] = now.replace(microsecond=0).isoformat(), int(result.get("searched") or 0)
             rec["deepV"] = DEEP_V  # what this deep run asked for (v3: also who they're connected with), so it's asked once, not again and again
             if result.get("profile"):
                 rec["profile"] = result["profile"]
@@ -2483,6 +2487,7 @@ PERSONAL_RE = re.compile(
     r"(?i)\b(?:spouses?|wife|wives|husbands?|married|marriage|fianc[ée]e?|divorc\w*|girlfriend|boyfriend|"
     r"(?:his|her|their|has|have)\s+(?:\w+\s+)?(?:children|kids|daughters?|sons?|child|baby|babies|family)|"
     r"(?:father|mother|mom|mum|dad|parent)\s+of|age\s+\d{1,3}|(?:his|her|their)\s+age|\d{1,3}[- ]years?[- ]old|born\s+(?:on|in)|birthday|"
+    r"(?:his|her|their)\s+(?:father|mother|parents?|mom|mum|dad|brothers?|sisters?|siblings?|cousins?|uncle|aunt|grand\w+)|siblings?|cousins?|\w+-in-laws?|"
     r"home\s+address|lives\s+in|resides\s+in|religio\w*|(?:his|her|their)\s+faith|political\s+(?:part(?:y|ies)|views?|affiliation|leanings?)|"
     r"votes?\s+for|(?:his|her|their)\s+(?:health|illness|condition|diagnosis|recovery)|health\s+(?:condition|issue|problem|scare)s?|"
     r"diagnos(?:ed|is|es)|illness|pregnan\w*)\b")
@@ -2522,7 +2527,10 @@ def _profile_lines(items, resolve, limit, personal, when=False, chars=PROFILE_CH
     return out
 
 
-PERSON_NAME_RE = re.compile(r"[A-Z][A-Za-z'’.-]+(?: [A-Z][A-Za-z'’.-]+){1,3}")
+def looks_like_name(name):
+    """2 to 4 capitalised words of letters (any alphabet: "José García", "Zoë Chen"), apostrophes, dots or hyphens."""
+    words = str(name or "").split(" ")
+    return 2 <= len(words) <= 4 and all(re.fullmatch(r"[^\W\d_][^\W\d_'’.-]*", w) and w[0].isupper() for w in words)
 
 
 def _profile_people(items, resolve):
@@ -2534,7 +2542,7 @@ def _profile_people(items, resolve):
             continue
         name, how = _profile_text(e.get("name"), 80), _profile_text(e.get("how"), PROFILE_CHARS)
         src = _profile_refs(e.get("src", e.get("sources")), resolve)
-        if not (name and PERSON_NAME_RE.fullmatch(name) and how and src) or name.lower() in names:
+        if not (name and looks_like_name(name) and how and src) or name.lower() in names:
             continue
         names.add(name.lower())
         out.append({"name": name, "role": _profile_text(e.get("role"), 120), "org": _profile_text(e.get("org"), 120), "how": how,
@@ -2679,7 +2687,7 @@ def research_status(email, rec, m, now=None):
         if email in RQ["pending"] or email in RQ["running"]:
             return "pending", "Looking up…"
         err = RQ["errors"].get(email)
-    if err:
+    if err and rec.get("found") != "confirmed":  # a failed refresh never hides what you confirmed
         return "error", "Couldn't look them up: " + err + "."
     if rec.get("lookup") == "done":
         return "done", ""

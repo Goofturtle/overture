@@ -2053,6 +2053,7 @@
   function openTimeline(email) {
     const dlg = $("#tlDialog");
     if (!dlg || !email || !D.people[email]) return;
+    dlg.onpointerdown = (e) => { dlg.dataset.downOut = e.target === dlg ? "1" : "0"; }; // where a click started, for the backdrop check
     dlg.innerHTML = window.CP.timelineHtml(email, profileLinks);
     window.CP.mountTimeline(dlg, email, profileLinks);
     if (!dlg.open) dlg.showModal();
@@ -2549,7 +2550,12 @@
       const tlOpen = e.target.closest("[data-open-tl]");
       if (tlOpen) { openTimeline(C.emailForKey(tlOpen.dataset.openTl)); return; }
       const tlDlg = $("#tlDialog");
-      if (tlDlg && tlDlg.open && (e.target.closest("[data-tl-close]") || e.target === tlDlg)) { tlDlg.close(); return; } // the X, or a click on the dim backdrop
+      if (tlDlg && tlDlg.open) {
+        // The X, or a click that started and ended on the dim backdrop (not a text selection dragged out of the dialog).
+        if (e.target.closest("[data-tl-close]") || (e.target === tlDlg && tlDlg.dataset.downOut === "1")) { tlDlg.close(); return; }
+        // A link to a page (Full profile, a guest, Open brief): close first, so even a link to the page you're on takes you there.
+        if (e.target.closest('#tlDialog a[href^="#/"]')) tlDlg.close();
+      }
       const jump = e.target.closest("[data-jump]");
       if (jump) { e.preventDefault(); const t = document.getElementById(jump.dataset.jump); if (t) { t.scrollIntoView({ behavior: "smooth", block: "start" }); t.setAttribute("tabindex", "-1"); t.focus({ preventScroll: true }); } return; }
       const run = e.target.closest("[data-run]");
