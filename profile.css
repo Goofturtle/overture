@@ -140,7 +140,7 @@ a.pf-who:hover, .link-btn.pf-who:hover { color: var(--accent); }
 .pm-lines { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .pm-line { fill: none; stroke: #c9c9c5; stroke-width: 1.5; stroke-linecap: round; transition: opacity 160ms ease, stroke 160ms ease; }
 .pm-line.past { stroke-dasharray: 4 5; }
-.pm-line.mentioned { stroke: #bdb7f4; }
+.pm-line.mentioned { stroke: color-mix(in srgb, var(--accent) 40%, var(--surface)); }
 .pm-line.lit { stroke: var(--accent); stroke-width: 2; }
 .pm-line.dim, .pm-dot.dim { opacity: 0.28; }
 .pm-dot { fill: var(--ink); stroke: var(--surface); stroke-width: 1.5; transition: opacity 160ms ease; }
@@ -273,14 +273,42 @@ a.who-chip:hover { color: var(--accent); }
   .pf-date { min-width: 52px; }
 }
 
-/* ---------- dark theme ---------- */
-:root[data-theme="dark"] .pm-canvas { background-color: #1b1c1f; background-image: radial-gradient(circle, #3a3b40 1px, transparent 1.3px); }
-:root[data-theme="dark"] .pm-line { stroke: #4a4b50; }
+/* ---------- dark theme (Spotify, the default): the same canvas as the People map, flat cards, bold names ---------- */
+:root[data-theme="dark"] .pm-canvas { border-color: var(--line); background-color: #0e0e0e; background-image: radial-gradient(circle, #2a2a2a 1px, transparent 1.3px); }
+:root[data-theme="dark"] .pm-line { stroke: #6a6a6a; }
+:root[data-theme="dark"] .pm-line.mentioned { stroke: color-mix(in srgb, var(--accent) 60%, #0e0e0e); }
 :root[data-theme="dark"] .pm-line.lit { stroke: var(--accent); }
+:root[data-theme="dark"] .pm-dot { fill: var(--accent); stroke: #0e0e0e; }
+:root[data-theme="dark"] .pm-node { border-color: #2a2a2a; background: var(--surface-2); box-shadow: none; transition: box-shadow 160ms ease, background-color var(--t-card) ease; }
+:root[data-theme="dark"] .pm-node:hover { background: var(--hover); box-shadow: none; transform: none; }
+:root[data-theme="dark"] .pm-node[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent), 0 0 0 6px color-mix(in srgb, var(--accent) 22%, transparent); }
+:root[data-theme="dark"] .pm-node .avatar { box-shadow: none; }
+:root[data-theme="dark"] .pm-self { border-color: var(--accent-line); }
+:root[data-theme="dark"] :is(.pm-card, .pm-row-card, .pf-mini, .pf-fact) { border-color: transparent; }
+:root[data-theme="dark"] .pf-title-row h1 { font-size: 32px; line-height: 1.25; }
+:root[data-theme="dark"] :is(.pf-h, .pf-org-name, .pm-card-name.pm-card-name, .pp-name, .tl-title, .tl-d-h) { font-weight: 700; letter-spacing: -0.01em; }
+:root[data-theme="dark"] .pf-list > li::before { background: var(--accent); }
+:root[data-theme="dark"] .pf-date-tile .m, :root[data-theme="dark"] .pm-date .m { color: var(--accent); }
+:root[data-theme="dark"] .pf-call:hover, :root[data-theme="dark"] .pm-row:hover { background: #2a2a2a; }
+/* Past to present: the track is a green gradient, cards lighten on hover. */
+:root[data-theme="dark"] .tl-track::before { background: linear-gradient(90deg, #2a2a2a, var(--accent-press) 70%, var(--accent)); }
+:root[data-theme="dark"] .tl-dot { background: #121212; box-shadow: 0 0 0 2px #535353; }
+:root[data-theme="dark"] .tl-call .tl-dot { box-shadow: 0 0 0 2px var(--accent); }
+:root[data-theme="dark"] .tl-now .tl-dot { background: var(--accent); box-shadow: 0 0 0 3px var(--bg), 0 0 0 6px color-mix(in srgb, var(--accent) 28%, transparent); }
+:root[data-theme="dark"] .tl-card { border-color: transparent; background: var(--surface-2); box-shadow: none; transition: background-color var(--t-card) ease, border-color 140ms ease; }
+:root[data-theme="dark"] .tl-card:hover { background: var(--hover); border-color: transparent; box-shadow: none; }
+:root[data-theme="dark"] .tl-card[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 0 5px color-mix(in srgb, var(--accent) 18%, transparent); }
+:root[data-theme="dark"] .tl-person { border-color: transparent; background: var(--chip); }
+:root[data-theme="dark"] .tl-person:hover { background: #333333; border-color: transparent; }
+:root[data-theme="dark"] .tl-guest:hover { background: var(--chip); }
+:root[data-theme="dark"] .tl-role { font-weight: 700; }
+:root[data-theme="dark"] .tl-dialog { background: #181818; }
+:root[data-theme="dark"] .tl-head { background: #181818; }
 
 @media (prefers-reduced-motion: reduce) {
   .pm-node, .pm-line, .pm-dot, .pf-cite, .pf-call, .pm-row, .pm-row .pf-chev, .pf-chev, .pf-open .ic { transition: none; }
   .pm-node:hover, .pf-open:hover .ic { transform: none; }
+  :root[data-theme="dark"] :is(.pm-node, .tl-card) { transition: none; }
 }
 
 /* ---------- past to present (profile.js timelineHtml): a dialog over the page ---------- */

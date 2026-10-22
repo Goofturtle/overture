@@ -169,3 +169,15 @@
   .cal-ev, .ag-ev { border: 1px solid CanvasText; }
   .cal-now, .cal-now::before, .cal-now-t { forced-color-adjust: none; }
 }
+
+/* ==================== Spotify theme (dark, the default) ====================
+   Today is a faint green column with the date in a green circle (black number); weekends a step lighter; call blocks
+   keep their company colour as an edge (base.css) and lighten on hover instead of lifting. */
+:root[data-theme="dark"] [data-view="calls"] { --cal-today: color-mix(in srgb, var(--accent) 5%, var(--bg)); }
+:root[data-theme="dark"] .cal-col.is-off { background: #161616; }
+:root[data-theme="dark"] .cal-range { font-weight: 700; letter-spacing: -0.01em; }
+:root[data-theme="dark"] .is-today .cal-dnum { font-weight: 700; }
+:root[data-theme="dark"] :is(.cal-ev, .ag-ev) { transition: background-color var(--t-card) ease; }
+:root[data-theme="dark"] :is(.cal-ev, .ag-ev):hover { transform: none; background: color-mix(in srgb, var(--ev-bg) 24%, var(--hover)); }
+:root[data-theme="dark"] .ev-co { font-weight: 700; }
+@media (prefers-reduced-motion: reduce) { :root[data-theme="dark"] :is(.cal-ev, .ag-ev) { transition: none; } }

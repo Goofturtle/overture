@@ -1,6 +1,9 @@
 /* MOAB design system, shared by the app (index.html) and the in-call panel (panel.html).
-   Asana-style (Mobbin refs in docs/DESIGN-ASANA.md): dark L chrome, flush white content, soft multi-tint tags,
-   round photo avatars, circle checks. Inter 400/500/600, one green accent, Lucide icons. */
+   Default look (data-theme="dark", accent "green"): Spotify-style. #000 frame and rail, #121212 page, #181818 cards that
+   lighten to #282828, white text, #b3b3b3 secondary text, one green (#1ed760, black text on green fills), pill buttons,
+   bold tight headings in Figtree. Spotify's own logo and fonts are not used.
+   Mobbin refs: Spotify web player library/playlist/home/settings, Vercel dark dashboard (see the end of this file).
+   The light theme (Settings > Appearance) keeps the earlier Asana look: round photo avatars, circle checks, Lucide icons. */
 :root {
   /* Chrome: Asana's dark L, top bar + sidebar */
   --chrome: #f1f0ef;
@@ -92,9 +95,9 @@
 html, body { height: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--ink);
-  font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: "Figtree", "Helvetica Neue", Helvetica, Arial, sans-serif; /* Figtree: the closest free face to Spotify's */
   font-size: 14px; line-height: 1.5; font-weight: 400;
-  font-feature-settings: "cv11", "ss01"; -webkit-font-smoothing: antialiased;
+  -webkit-font-smoothing: antialiased;
 }
 h1, h2, h3, p, dl, dd, figure, blockquote { margin: 0; }
 ul, ol { margin: 0; padding: 0; list-style: none; }
@@ -345,68 +348,50 @@ code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-siz
 :root[data-accent="pink"] { --accent: #db2777; --accent-hover: #be185d; --accent-press: #9d174d; --accent-bg: #fdeef5; --accent-line: #f5c0d8; --chrome-focus: #db2777; }
 :root[data-accent="orange"] { --accent: #c2410c; --accent-hover: #9a3412; --accent-press: #7c2d12; --accent-bg: #fff0e6; --accent-line: #f7c9a7; --chrome-focus: #c2410c; }
 
-:root[data-theme="dark"] {
+/* Dark = the Spotify theme, and the default (settings.js). :not([data-theme]) covers the first paint of a first visit,
+   before settings.js has run. Layers: #000 frame, #121212 page, #181818 cards, #1f1f1f raised, #282828 hover. */
+:root[data-theme="dark"], :root:not([data-theme]) {
   color-scheme: dark;
-  --chrome: #18191b; --chrome-hover: rgba(255, 255, 255, 0.06); --chrome-active: rgba(255, 255, 255, 0.11); --chrome-line: #2c2d31;
-  --chrome-field: #232428; --chrome-field-hover: #2a2b30; --chrome-ink: #ececee; --chrome-muted: #a3a4aa;
-  --bg: #1f2023; --surface: #26272b; --canvas: #18191b; --rail: #232427; --surface-2: #2a2b2f; --hover: #2a2b2f; --press: #323338;
-  --chip: #34353a; --selected: #24352c; --line: #333438; --line-2: #3d3e43; --btn-line: #4a4b51; --field: #5d5e64; --field-hover: #7a7b81; --dot: #55565b;
-  --ink: #ececee; --ink-2: #c9cacf; --muted: #9c9da3; --faint: #6f7076;
-  --accent: #8f88f5; --accent-hover: #a39df7; --accent-press: #b6b1f9; --accent-bg: #2c2a52; --accent-line: #4c4796; --chrome-focus: #8f88f5;
-  --accent-fill: #5850e0; --accent-fill-hover: #6860ea; --accent-fill-press: #7770ee;
-  --danger: #f27a6f; --danger-bg: #4a2422;
-  --tag-gray-bg: #3a3b40;   --tag-gray-ink: #dedfe3;
-  --tag-green-bg: #1f4a35;  --tag-green-ink: #a9e6c4;
-  --tag-blue-bg: #1f3a5c;   --tag-blue-ink: #b3d2f7;
-  --tag-purple-bg: #3a2d63; --tag-purple-ink: #d6c6fb;
-  --tag-orange-bg: #553419; --tag-orange-ink: #f8cfa3;
-  --tag-yellow-bg: #4d4114; --tag-yellow-ink: #f3df8c;
-  --tag-pink-bg: #55233f;   --tag-pink-ink: #f5bde0;
-  --tag-teal-bg: #1b4744;   --tag-teal-ink: #a6e3dd;
-  --tag-red-bg: #5a2427;    --tag-red-ink: #f6b1b1;
-  --scrim: rgba(0, 0, 0, 0.55);
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-raise: 0 1px 2px rgba(0, 0, 0, 0.35), 0 4px 12px rgba(0, 0, 0, 0.35);
-  --shadow-pop: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 6px 20px rgba(0, 0, 0, 0.5);
-  --shadow-modal: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 16px 48px rgba(0, 0, 0, 0.6);
+  --chrome: #000000; --chrome-hover: #1a1a1a; --chrome-active: #1f1f1f; --chrome-line: #1f1f1f;
+  --chrome-field: #242424; --chrome-field-hover: #2a2a2a; --chrome-ink: #ffffff; --chrome-muted: #b3b3b3;
+  --bg: #121212; --surface: #181818; --canvas: #121212; --rail: #181818; --surface-2: #1f1f1f; --hover: #282828; --press: #2a2a2a;
+  --chip: #2a2a2a; --selected: #1a2e21; --line: #282828; --line-2: #333333; --btn-line: #727272; --field: #727272; --field-hover: #b3b3b3; --dot: #535353;
+  --ink: #ffffff; --ink-2: #dedede; --muted: #b3b3b3; --faint: #818181;
+  /* Spotify green, and the dark theme's accent for "indigo" too (the old default; indigo is retired here):
+     #1ed760, #1fdf64 on hover, black text on every green fill (11:1). */
+  --accent: #1ed760; --accent-hover: #1fdf64; --accent-press: #1db954; --accent-bg: #133b23; --accent-line: #1f6e3d; --chrome-focus: #1ed760;
+  --accent-fill: #1ed760; --accent-fill-hover: #1fdf64; --accent-fill-press: #1db954; --on-accent: #000000;
+  --danger: #f3727f; --danger-bg: #3a1619;
+  /* Tags are neutral chips; green is the one coloured state, red is kept only for risk (Hot, security). */
+  --tag-gray-bg: #2a2a2a;   --tag-gray-ink: #ffffff;
+  --tag-green-bg: #133b23;  --tag-green-ink: #1ed760;
+  --tag-blue-bg: #2a2a2a;   --tag-blue-ink: #ffffff;
+  --tag-purple-bg: #2a2a2a; --tag-purple-ink: #ffffff;
+  --tag-orange-bg: #2a2a2a; --tag-orange-ink: #ffffff;
+  --tag-yellow-bg: #2a2a2a; --tag-yellow-ink: #ffffff;
+  --tag-pink-bg: #2a2a2a;   --tag-pink-ink: #ffffff;
+  --tag-teal-bg: #2a2a2a;   --tag-teal-ink: #ffffff;
+  --tag-red-bg: #3a1619;    --tag-red-ink: #ff9aa2;
+  --scrim: rgba(0, 0, 0, 0.7);
+  --shadow-card: none;
+  --shadow-raise: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-pop: 0 16px 24px rgba(0, 0, 0, 0.3), 0 6px 8px rgba(0, 0, 0, 0.2);
+  --shadow-modal: 0 0 0 1px #282828, 0 16px 48px rgba(0, 0, 0, 0.7);
   --frame-bg: rgba(255, 255, 255, 0.03);
+  --r-lg: 8px; --r-xl: 8px;    /* Spotify cards and panels: 8px corners */
+  --t-card: 300ms;             /* card lighten on hover */
 }
-:root[data-theme="dark"][data-accent="green"] { --accent: #4cc17a; --accent-hover: #63cd8c; --accent-press: #7ad89e; --accent-bg: #1b3a28; --accent-line: #2f6a45; --chrome-focus: #4cc17a; --accent-fill: #18803f; --accent-fill-hover: #1d8f48; --accent-fill-press: #22a052; }
-:root[data-theme="dark"][data-accent="blue"] { --accent: #6aa2f7; --accent-hover: #80b1f8; --accent-press: #96bff9; --accent-bg: #1c3150; --accent-line: #335a96; --chrome-focus: #6aa2f7; --accent-fill: #2b63e0; --accent-fill-hover: #3b72ea; --accent-fill-press: #4a80f0; }
-:root[data-theme="dark"][data-accent="pink"] { --accent: #f06aa8; --accent-hover: #f382b6; --accent-press: #f59ac4; --accent-bg: #46202f; --accent-line: #7d3556; --chrome-focus: #f06aa8; --accent-fill: #c92a72; --accent-fill-hover: #d63a80; --accent-fill-press: #e04b8d; }
-:root[data-theme="dark"][data-accent="orange"] { --accent: #f2894a; --accent-hover: #f49a63; --accent-press: #f6ab7c; --accent-bg: #45281a; --accent-line: #7c4628; --chrome-focus: #f2894a; --accent-fill: #b8460f; --accent-fill-hover: #c8531a; --accent-fill-press: #d46026; }
+/* Other accents in the dark theme: a light shade for text and rings, a deeper fill under white text. */
+:root[data-theme="dark"][data-accent="blue"] { --accent: #6aa2f7; --accent-hover: #80b1f8; --accent-press: #96bff9; --accent-bg: #1c3150; --accent-line: #335a96; --chrome-focus: #6aa2f7; --accent-fill: #2b63e0; --accent-fill-hover: #3b72ea; --accent-fill-press: #4a80f0; --on-accent: #ffffff; }
+:root[data-theme="dark"][data-accent="pink"] { --accent: #f06aa8; --accent-hover: #f382b6; --accent-press: #f59ac4; --accent-bg: #46202f; --accent-line: #7d3556; --chrome-focus: #f06aa8; --accent-fill: #c92a72; --accent-fill-hover: #d63a80; --accent-fill-press: #e04b8d; --on-accent: #ffffff; }
+:root[data-theme="dark"][data-accent="orange"] { --accent: #f2894a; --accent-hover: #f49a63; --accent-press: #f6ab7c; --accent-bg: #45281a; --accent-line: #7c4628; --chrome-focus: #f2894a; --accent-fill: #b8460f; --accent-fill-hover: #c8531a; --accent-fill-press: #d46026; --on-accent: #ffffff; }
 
-/* Dark: the few places that drew their own light greys. */
+/* Dark: the few places that drew their own light greys. (The People map, Home hero and profile map have their own
+   dark rules at the end of map.css, home.css and profile.css.) */
 :root[data-theme="dark"] body { background: var(--bg); }
-:root[data-theme="dark"] .board { background: #1b1c1f; }
-:root[data-theme="dark"] .board-viewport { background-image: radial-gradient(circle, #3a3b40 1px, transparent 1.3px); }
-:root[data-theme="dark"] .frame { border-color: var(--line-2); }
-:root[data-theme="dark"] .frame-head:hover { background: rgba(255, 255, 255, 0.05); }
-:root[data-theme="dark"] .node { border-color: var(--line); }
-:root[data-theme="dark"] .edge { stroke: #55565c; }
-:root[data-theme="dark"] .edge.together { stroke: #6a6b71; }
-:root[data-theme="dark"] .edge.hot { stroke: #a3a4aa; }
-:root[data-theme="dark"] .lk.moved { border-top-color: #55565c; }
-:root[data-theme="dark"] .lk.together { border-top-color: #6a6b71; }
-:root[data-theme="dark"] .node.you { background: #0f1012; border-color: #3d3e43; }
-:root[data-theme="dark"] .home-hero::before { background-image: radial-gradient(circle, #34353a 1px, transparent 1.4px); }
-:root[data-theme="dark"] .hw-grey { stroke: #4a4b51; }
-:root[data-theme="dark"] .hw-ring-track { stroke: #34353a; }
-:root[data-theme="dark"] .hw-card { border-color: var(--line-2); }
-:root[data-theme="dark"] .tone-indigo { background: #2c2a52; color: #c3bffa; }
-:root[data-theme="dark"] .tone-pink { background: #4a2136; color: #f5b9d4; }
-:root[data-theme="dark"] .tone-red { background: #4d2224; color: #f5b1b1; }
-:root[data-theme="dark"] .tone-teal { background: #19403d; color: #a6e3dd; }
-:root[data-theme="dark"] .tone-purple { background: #352a57; color: #d6c6fb; }
-:root[data-theme="dark"] .tone-green { background: #1c3f2c; color: #a9e6c4; }
-:root[data-theme="dark"] .grad-text { background-image: linear-gradient(90deg, #a39df7 0%, #d98ae6 55%, #f59ac0 100%); }
-:root[data-theme="dark"] .ask-btn:hover { background: var(--hover); border-color: var(--accent-line); }
-:root[data-theme="dark"] .search-trigger, :root[data-theme="dark"] .search-trigger:hover { border-color: var(--line-2); }
-:root[data-theme="dark"] .search-trigger .st-text, :root[data-theme="dark"] .search-trigger .ic, :root[data-theme="dark"] .search-field input::placeholder { color: var(--muted); }
-:root[data-theme="dark"] .home-ask:hover { border-color: var(--line-2); }
-:root[data-theme="dark"] .hs-result.ok, :root[data-theme="dark"] .mn-done { color: #6fd39a; }
-:root[data-theme="dark"] .rel-kind.moved, :root[data-theme="dark"] .rel-kind.works { border-top-color: #55565c; }
-:root[data-theme="dark"] select.input { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239c9da3' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); }
+:root[data-theme="dark"] .hs-result.ok, :root[data-theme="dark"] .mn-done { color: var(--accent); }
+:root[data-theme="dark"] .rel-kind.moved, :root[data-theme="dark"] .rel-kind.works { border-top-color: #535353; }
+:root[data-theme="dark"] select.input { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b3b3b3' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); }
 :root[data-theme="dark"] .palette::backdrop { background: rgba(0, 0, 0, 0.4); }
 
 /* Compact: tighter rows and gaps everywhere (text sizes stay; line heights stay at 1.3 or more). */
@@ -428,3 +413,64 @@ code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-siz
 :root[data-theme="dark"] :is(.cal-ev, .ag-ev):hover { box-shadow: inset 3px 0 0 var(--ev-bg), var(--shadow-raise); }
 :root[data-theme="dark"] .ev-co, :root[data-theme="dark"] .ev-when .ic { color: var(--ev-bg); }
 :root[data-theme="dark"] .ev-in > .stack .avatar { box-shadow: 0 0 0 1.5px var(--surface); }
+
+/* ==================== Spotify theme (dark, the default): shared components ====================
+   Mobbin references, looked at before building (web unless marked):
+   - Spotify, playlist page: #121212 panels set in #000, round green play button, track rows that light up on hover
+       https://mobbin.com/screens/802255eb-4140-4001-b7db-30aa91a96a88
+   - Spotify, Today's Top Hits: selected row #2a2a2a, the playing title in green, everything else white / #b3b3b3
+       https://mobbin.com/screens/102ff41d-2683-484c-afea-58b3a5df2006
+   - Spotify, home shelves: pill filter chips, 24px bold shelf titles, "Show all" in bold #b3b3b3
+       https://mobbin.com/screens/a46c1e01-5a6b-47d5-8d32-6688d86f0694
+   - Spotify, settings: big bold title, bold section names, #b3b3b3 descriptions, outlined pill button, green switches
+       https://mobbin.com/screens/45bf2e35-7949-49c2-b19d-9fb6c2cf53cf
+   - Spotify, account: rounded #242424 cards on #121212 with bold card titles
+       https://mobbin.com/screens/416bdb05-a4a0-42b4-865b-7b43fadb4f5b
+   - Spotify iOS, browse: saturated colour tiles are the only colour next to the green
+       https://mobbin.com/screens/7d1d7f6f-e8d8-4569-8ff4-401b84695a0a
+   - Vercel, dark overview: hairline cards on near-black, one accent used sparingly
+       https://mobbin.com/screens/9b397b77-fd80-4157-9867-2ae4010133a4
+   What came from them: no card shadows, depth by fill; green only for the main action, the current/next state and
+   selection, with black text on it; outlined pills for second actions; 700-800 headings with tight tracking; quick
+   motion with no bounce: cards lighten over 300ms, pill buttons grow to 1.04 and press to 0.96. */
+:root[data-theme="dark"] h1 { font-weight: 800; letter-spacing: -0.02em; }
+:root[data-theme="dark"] .btn {
+  border-radius: var(--r-full); font-weight: 700;
+  transition: background-color var(--t-fast) ease, border-color var(--t-fast) ease, color var(--t-fast) ease, transform var(--t-fast) ease;
+}
+:root[data-theme="dark"] .btn.primary:hover { transform: scale(1.04); }
+:root[data-theme="dark"] .btn.primary:active { transform: scale(0.96); }
+:root[data-theme="dark"] .btn.secondary { background: transparent; border-color: var(--btn-line); color: var(--ink); }
+:root[data-theme="dark"] .btn.secondary:hover { background: transparent; border-color: var(--ink); transform: scale(1.04); }
+:root[data-theme="dark"] .btn.secondary:active { background: transparent; border-color: var(--muted); transform: scale(0.96); }
+:root[data-theme="dark"] .btn.ghost { color: var(--muted); }
+:root[data-theme="dark"] .btn.ghost:hover { background: var(--press); color: var(--ink); }
+:root[data-theme="dark"] .btn.big:hover { transform: scale(1.02); }  /* wide buttons grow less, so the edge moves as little */
+:root[data-theme="dark"] .btn.big:active { transform: scale(0.98); }
+:root[data-theme="dark"] .btn:disabled, :root[data-theme="dark"] .btn[aria-disabled="true"] { transform: none; }
+:root[data-theme="dark"] .btn.secondary:disabled:hover { background: transparent; border-color: var(--btn-line); }
+:root[data-theme="dark"] .icon-btn { border-radius: var(--r-full); color: var(--muted); }
+:root[data-theme="dark"] .icon-btn:hover { background: var(--press); color: var(--ink); }
+
+/* Tags: rounded chips, neutral; green (and the accent pill) is the one coloured state. */
+:root[data-theme="dark"] .pill { border-radius: var(--r-full); padding: 0 8px; font-weight: 600; }
+:root[data-theme="dark"] .pill.critical { color: #000000; }
+:root[data-theme="dark"] .src.public::before { background: var(--accent); }
+
+/* Focus and selection: the accent ring with a soft green halo. Not on headings the router focuses (tabindex -1), and not
+   on text fields: a field shows focus on its own box (or its search pill's ring), never a second box inside it. */
+:root[data-theme="dark"] :focus-visible:not([tabindex="-1"], input, textarea, select) { box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 22%, transparent); }
+:root[data-theme="dark"] :is(.input, .sheet textarea, .sheet input, .sheet select):focus {
+  border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 0 5px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+:root[data-theme="dark"] .progress span { background: linear-gradient(90deg, var(--accent-press), var(--accent)); }
+
+/* MOAB's own bot, recoloured: green body, black eyes, white "working" dot. (Not Spotify's logo.) */
+:root[data-theme="dark"] .logo > path { fill: #1ed760; }
+:root[data-theme="dark"] .logo-eyes { fill: #000000; }
+:root[data-theme="dark"] .logo-dot { fill: #ffffff; }
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="dark"] .btn, :root[data-theme="dark"] .icon-btn { transition: none; }
+  :root[data-theme="dark"] .btn { transform: none !important; } /* beats every :hover/:active scale above, however specific */
+}

@@ -263,7 +263,7 @@
       });
       // Lit lines draw last so the selected path sits on top.
       const xs = shown.map((n) => lay.pos[n.id].x), x0 = Math.min(...xs) - 200, x1 = Math.max(...xs) + 200;
-      const grad = '<defs><linearGradient id="mapGrad" gradientUnits="userSpaceOnUse" x1="' + x0 + '" y1="0" x2="' + x1 + '" y2="0"><stop offset="0" stop-color="#6d63e6"/><stop offset="0.55" stop-color="#d05cc0"/><stop offset="1" stop-color="#f5845c"/></linearGradient></defs>';
+      const grad = '<defs><linearGradient id="mapGrad" gradientUnits="userSpaceOnUse" x1="' + x0 + '" y1="0" x2="' + x1 + '" y2="0"><stop offset="0" stop-color="#1ed760"/><stop offset="0.55" stop-color="#d05cc0"/><stop offset="1" stop-color="#1fdf64"/></linearGradient></defs>';
       svg.innerHTML = grad + paths.filter((x) => !x.includes(" lit")).concat(paths.filter((x) => x.includes(" lit"))).join("") + dots.join("");
       nodesEl.innerHTML = lay.frames.map(frameHtml).join("")
         + labels.map((l, k) => '<button type="button" class="edge-label ' + l.e.kind + (animSel ? " pop" : "") + '" data-edge="' + l.i + '" style="left:' + l.x + "px;top:" + l.y + "px;--i:" + k + '">' + esc(l.e.label) + "</button>").join("")

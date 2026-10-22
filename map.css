@@ -39,9 +39,9 @@
 .edges path, .edges circle { transform: translate(3000px, 3000px); transition: opacity 160ms ease, stroke 160ms ease; }
 .edges path { fill: none; stroke-linecap: round; }
 .edge { stroke: #cdcdc9; stroke-width: 1.5; }
-.edge.warm { stroke: #a9a4f5; stroke-width: 1.75; }
+.edge.warm { stroke: var(--accent); stroke-width: 1.75; }
 .edge.together { stroke-dasharray: 4 5; stroke: #b4b4b0; }
-.edge.mentioned { stroke: #bdb7f4; stroke-width: 1.5; }
+.edge.mentioned { stroke: color-mix(in srgb, var(--accent) 40%, var(--surface)); stroke-width: 1.5; }
 .edge.lit { stroke: var(--accent); stroke-width: 2; }
 .edge.dim, .edot.dim { opacity: 0.25; }
 .edot { fill: var(--ink); stroke: var(--surface); stroke-width: 1.5; }
@@ -125,12 +125,12 @@
   font-size: 12px; color: var(--ink-2); line-height: 1.5; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px;
 }
 .board-legend p { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
-.lk { position: relative; width: 24px; height: 0; border-top: 1.75px solid #a9a4f5; flex: none; }
+.lk { position: relative; width: 24px; height: 0; border-top: 1.75px solid var(--accent); flex: none; }
 .lk::before, .lk::after { content: ""; position: absolute; top: -4.5px; width: 7px; height: 7px; border-radius: 50%; background: var(--ink); }
 .lk::before { left: -3px; } .lk::after { right: -3px; }
 .lk.moved { border-top: 1.5px solid #cdcdc9; }
 .lk.together { border-top: 1.5px dashed #b4b4b0; }
-.lk.mentioned { border-top: 1.5px solid #bdb7f4; }
+.lk.mentioned { border-top: 1.5px solid color-mix(in srgb, var(--accent) 40%, var(--surface)); }
 .legend-src { gap: 12px !important; padding-left: 16px; border-left: 1px solid var(--line); }
 .board-focus {
   position: absolute; right: 12px; bottom: 14px; display: flex; align-items: center; gap: 12px;
@@ -173,7 +173,7 @@
 @keyframes mapFadeDown { from { opacity: 1; } }
 @keyframes mapFadeUp { from { opacity: 0.25; } }
 @keyframes mapAppear { from { opacity: 0; } }
-@keyframes mapRing { from { box-shadow: 0 0 0 9px rgba(79, 70, 229, 0), var(--card-shadow-hi); } }
+@keyframes mapRing { from { box-shadow: 0 0 0 9px transparent, var(--card-shadow-hi); } }
 @keyframes mapLabelPop { from { opacity: 0; transform: translate(-50%, -50%) scale(0.86); } }
 @keyframes mapRise { from { opacity: 0; transform: translateY(4px); } }
 .edge.fade-out, .edot.fade-out { animation: mapFadeDown 260ms var(--ease) both; }
@@ -211,9 +211,11 @@
   .node:hover, .node.hovering, .board-zoom [data-z]:hover .ic, .map-side .side-actions .btn:hover .ic { transform: none; }
 }
 
-/* Warm and selected lines carry the indigo-to-pink gradient. */
+/* Warm and selected lines carry a gradient in the accent (map.js draws #mapGrad with fixed colours; these stops win). */
 .edge.warm { stroke: url(#mapGrad); stroke-opacity: 0.75; }
 .edge.lit { stroke: url(#mapGrad); stroke-opacity: 1; }
+#mapGrad stop:nth-child(1), #mapGrad stop:nth-child(3) { stop-color: var(--accent); }
+#mapGrad stop:nth-child(2) { stop-color: color-mix(in srgb, var(--accent) 55%, var(--surface)); }
 
 /* Click-to-explain card (core.js explainHtml): what a connection is, its sourced sentences (numbered to the sources under
    them), short quotes with links and dates, the call's own words, and where it was found. Used in the People map's popover
@@ -258,3 +260,50 @@
 .map-side .xp > .xp-card { padding: 10px 12px; }
 @media (prefers-reduced-motion: reduce) { .xp-chev { transition: none; } }
 .xp > summary .xp-chev { animation: none !important; }  /* the chevron turns; it doesn't nudge */
+
+/* ==================== Spotify theme (dark, the default): the People map ====================
+   A near-black canvas (#0e0e0e) with a quiet dot grid, flat #1f1f1f cards that lighten on hover, grey lines for
+   past links and green gradient lines for warm and selected ones, green end dots. "You" is the one green card. */
+:root[data-theme="dark"] .board { --card-shadow: none; --card-shadow-hi: 0 8px 24px rgba(0, 0, 0, 0.5); background: #0e0e0e; border-color: var(--line); }
+:root[data-theme="dark"] .board-viewport { background-image: radial-gradient(circle, #2a2a2a 1px, transparent 1.3px); }
+:root[data-theme="dark"] .frame { border-color: #242424; background: rgba(255, 255, 255, 0.025); }
+:root[data-theme="dark"] .frame-head:hover { background: rgba(255, 255, 255, 0.05); }
+:root[data-theme="dark"] .frame-name { font-weight: 700; }
+:root[data-theme="dark"] .node { background: var(--surface-2); border-color: #2a2a2a; transition: opacity 160ms ease, box-shadow 160ms ease, transform 200ms var(--ease), background-color var(--t-card) ease; }
+:root[data-theme="dark"] .node:hover, :root[data-theme="dark"] .node.hovering { background: var(--hover); }
+:root[data-theme="dark"] .node.person + .node.person { border-top-color: #2a2a2a; }
+:root[data-theme="dark"] .node .avatar, :root[data-theme="dark"] .node.past .co-tile { box-shadow: none; }
+:root[data-theme="dark"] .node-name { font-weight: 700; }
+:root[data-theme="dark"] .node.selected,
+:root[data-theme="dark"] .node.selected:hover { box-shadow: 0 0 0 2px var(--accent), 0 0 0 6px color-mix(in srgb, var(--accent) 22%, transparent), var(--card-shadow-hi); }
+:root[data-theme="dark"] .node.dim { box-shadow: 0 0 0 1px #2a2a2a; }
+/* You: Spotify green with black text, a black monogram and a soft green halo. */
+:root[data-theme="dark"] .node.you { background: #1ed760; border-color: #1ed760; color: #000000; box-shadow: 0 0 0 4px rgba(30, 215, 96, 0.2), 0 10px 24px rgba(0, 0, 0, 0.5); }
+:root[data-theme="dark"] .node.you:hover { background: #1fdf64; box-shadow: 0 0 0 5px rgba(30, 215, 96, 0.28), 0 14px 30px rgba(0, 0, 0, 0.55); }
+:root[data-theme="dark"] .node.you .you-av { background: #000000; color: #1ed760; }
+:root[data-theme="dark"] .node.you .node-name { color: #000000; }
+:root[data-theme="dark"] .node.you .node-sub { color: rgba(0, 0, 0, 0.72); }
+:root[data-theme="dark"] .node.you .you-tag { background: rgba(0, 0, 0, 0.16); color: #000000; }
+:root[data-theme="dark"] .node.you.selected { box-shadow: 0 0 0 2px #0e0e0e, 0 0 0 4px #1ed760, 0 0 0 9px rgba(30, 215, 96, 0.2), 0 14px 30px rgba(0, 0, 0, 0.55); }
+/* Line colours keep 3:1 or more against the #0e0e0e canvas (grey 3.6:1, mentioned green 5:1). */
+:root[data-theme="dark"] .edge { stroke: #6a6a6a; }
+:root[data-theme="dark"] .edge.together { stroke: #727272; }
+:root[data-theme="dark"] .edge.hot { stroke: #b3b3b3; }
+:root[data-theme="dark"] .edge.mentioned { stroke: color-mix(in srgb, var(--accent) 60%, #0e0e0e); }
+:root[data-theme="dark"] .edge.warm { stroke: url(#mapGrad); }
+:root[data-theme="dark"] .edge.lit, :root[data-theme="dark"] .edge.warm.hot, :root[data-theme="dark"] .edge.lit.hot { stroke: url(#mapGrad); stroke-opacity: 1; }
+:root[data-theme="dark"] .edot { fill: var(--accent); stroke: #0e0e0e; }
+:root[data-theme="dark"] .edges .flow { stroke: #0e0e0e; }
+:root[data-theme="dark"] #mapGrad stop:nth-child(2) { stop-color: color-mix(in srgb, var(--accent) 50%, #0e0e0e); }
+:root[data-theme="dark"] .lk.moved { border-top-color: #6a6a6a; }
+:root[data-theme="dark"] .lk.together { border-top-color: #727272; }
+:root[data-theme="dark"] .lk.mentioned { border-top-color: color-mix(in srgb, var(--accent) 60%, var(--surface)); }
+:root[data-theme="dark"] .lk::before, :root[data-theme="dark"] .lk::after { background: var(--accent); }
+:root[data-theme="dark"] :is(.edge-label, .board-zoom, .board-legend) { background: var(--surface-2); }
+:root[data-theme="dark"] .edge-label:hover { background: var(--hover); }
+:root[data-theme="dark"] .edge-pop { background: #282828; }
+:root[data-theme="dark"] .board-focus { font-weight: 600; }
+:root[data-theme="dark"] .xp-quote { border-left-color: var(--accent); }
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="dark"] .node { transition: none; }
+}

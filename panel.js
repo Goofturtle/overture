@@ -101,7 +101,7 @@
   }
 
   // ---------- render ----------
-  const LOGO = '<svg class="logo sm" viewBox="0 0 48 48" aria-hidden="true"><defs><mask id="moabCut"><rect width="48" height="48" fill="#fff"/><circle cx="38.5" cy="9.5" r="8" fill="#000"/></mask></defs><path d="M24 5c11 0 19 4.2 19 17.5S36 43 24 43 5 35.8 5 22.5 13 5 24 5z" fill="#4F46E5" mask="url(#moabCut)"/><g class="logo-eyes" fill="#fff"><rect x="15.5" y="18" width="5.5" height="11" rx="2.75"/><rect x="27" y="18" width="5.5" height="11" rx="2.75"/></g><circle class="logo-dot" cx="38.5" cy="9.5" r="5" fill="#22C55E"/></svg>';
+  const LOGO = '<svg class="logo sm" viewBox="0 0 48 48" aria-hidden="true"><defs><mask id="moabCut"><rect width="48" height="48" fill="#fff"/><circle cx="38.5" cy="9.5" r="8" fill="#000"/></mask></defs><path d="M24 5c11 0 19 4.2 19 17.5S36 43 24 43 5 35.8 5 22.5 13 5 24 5z" fill="#1ED760" mask="url(#moabCut)"/><g class="logo-eyes" fill="#000"><rect x="15.5" y="18" width="5.5" height="11" rx="2.75"/><rect x="27" y="18" width="5.5" height="11" rx="2.75"/></g><circle class="logo-dot" cx="38.5" cy="9.5" r="5" fill="#22C55E"/></svg>';
   function header() {
     const inv = window.C.inviteById(state.callId);
     const live = HOST !== "preview" || FRAMED;
@@ -448,7 +448,7 @@
     if (!cc.lines.length) {
       if (!qs.get("meet")) return "";
       const off = (t) => '<p class="p-listen"><span class="live-dot off" aria-hidden="true"></span>' + t + "</p>";
-      if (!cc.seenAt) return off("MOAB's caption reader isn't running in this Meet tab yet. Reload the Meet tab once (or the MOAB extension), then turn on CC.");
+      if (!cc.seenAt || Date.now() - cc.seenAt > 15000) return off(/* nothing from the reader for 15 s: it isn't running */ "MOAB's caption reader isn't running in this Meet tab yet. Reload the Meet tab once (or the MOAB extension), then turn on CC.");
       if (!cc.box) return off("Turn on captions (CC) in Meet and MOAB finds who and what is mentioned. Let everyone know you're taking AI notes.");
       return '<p class="p-listen on"><span class="live-dot" aria-hidden="true"></span>Captions are on. Waiting for someone to speak…</p>';
     }

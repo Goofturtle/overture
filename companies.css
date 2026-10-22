@@ -251,3 +251,28 @@
 .cs-pink { background: var(--tag-pink-bg); color: var(--tag-pink-ink); }
 @media (max-width: 1100px) { .co-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 640px) { .co-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .co-stat-n { font-size: 24px; } }
+
+/* ==================== Spotify theme (dark, the default) ====================
+   Views are pill chips (the chosen one white), the table reads like a track list: no cell rules, 56px rows that light to
+   #2a2a2a, names in white and details in #b3b3b3. The next-call card is a flat tile that lightens on hover. */
+:root[data-theme="dark"] .co-view { height: 32px; padding: 0 14px; border-color: transparent; background: var(--chip); color: var(--ink); font-size: 14px; }
+:root[data-theme="dark"] .co-view:hover { border-color: transparent; background: #333333; }
+:root[data-theme="dark"] .co-view[aria-pressed="true"] { border-color: var(--ink); background: var(--ink); color: #000000; }
+:root[data-theme="dark"] .co-view[aria-pressed="true"] .co-view-n { color: #000000; }
+:root[data-theme="dark"] .co-view-n { color: var(--muted); }
+:root[data-theme="dark"] .co-table { border-top: 0; }
+:root[data-theme="dark"] .co-tr { min-height: 56px; border-bottom-color: transparent; border-radius: 4px; }
+:root[data-theme="dark"] .co-th { min-height: 40px; border-bottom-color: var(--line); border-radius: 0; }
+:root[data-theme="dark"] .co-td { border-right-color: transparent; color: var(--muted); }
+:root[data-theme="dark"] .co-tr:not(.co-th):not(.co-foot):not(.co-empty):hover { background: #2a2a2a; }
+:root[data-theme="dark"] .co-tr:not(.co-th):not(.co-foot):not(.co-empty):hover .co-td { color: var(--ink); }
+:root[data-theme="dark"] .co-tr:hover .co-faces .avatar { box-shadow: 0 0 0 2px #2a2a2a; }
+:root[data-theme="dark"] .co-name .stretch { font-size: 15px; }
+:root[data-theme="dark"] .co-focus { border-color: transparent; background: var(--surface); transition: background-color var(--t-card) ease; }
+:root[data-theme="dark"] .co-focus:hover { border-color: transparent; background: var(--hover); box-shadow: none; }
+:root[data-theme="dark"] .co-focus-title { font-weight: 700; }
+:root[data-theme="dark"] .co-call:hover { background: #333333; }
+:root[data-theme="dark"] .co-stat { border-radius: 8px; }
+:root[data-theme="dark"] .co-stat-n { font-weight: 800; }
+:root[data-theme="dark"] .co-stat-l { font-weight: 700; }
+@media (prefers-reduced-motion: reduce) { :root[data-theme="dark"] :is(.co-view, .co-tr, .co-focus) { transition: none; } }

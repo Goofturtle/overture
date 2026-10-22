@@ -26,7 +26,7 @@
   // Who said what. Meet shows each speaker as a block: their picture, their name, then their words. Use those blocks when they're
   // there (the name is exact, in any language); otherwise fall back to guessing names line by line.
   function captionsOf(box) {
-    const isBlock = (el) => el.querySelector("img") && lineList(el).length >= 2;
+    const isBlock = (el) => el.querySelector("img, svg") && lineList(el).length >= 2; // a photo, or an icon (dial-in callers)
     const blocks = [...box.querySelectorAll("div")].filter((el) => isBlock(el) && ![...el.children].some(isBlock));
     if (blocks.length) return blocks.map((b) => { const ls = lineList(b); return { speaker: ls[0], text: ls.slice(1).join(" ") }; });
     const ls = lineList(box), out = [];
@@ -78,7 +78,8 @@
     if (out.length) send("moab-captions", { lines: out });
   }
   const timer = setInterval(() => {
-    if (document.documentElement.dataset.moabCaptions !== me) { clearInterval(timer); return; } // replaced by a newer copy
+    // replaced by a newer copy, or the extension was turned off: stop
+    if (document.documentElement.dataset.moabCaptions !== me || !(chrome.runtime && chrome.runtime.id)) { clearInterval(timer); return; }
     tick();
   }, POLL_MS);
 })();

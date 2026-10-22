@@ -95,8 +95,10 @@
 .lv-side { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; border-radius: 12px; background: var(--surface); color: var(--ink); overflow: hidden; }
 .lv-side-head { display: flex; align-items: center; gap: 10px; min-height: 56px; padding: 0 16px 0 20px; }
 .lv-side-head img { width: 22px; height: 22px; flex: none; }
-.lv-side-title { flex: 1; min-width: 0; font-size: 16px; font-weight: 500; line-height: 1.5; color: #1f1f1f; }
-.lv-side-head .ic { width: 20px; height: 20px; color: #5f6368; }
+.lv-side-title { flex: 1; min-width: 0; font-size: 16px; font-weight: 500; line-height: 1.5; color: var(--ink); } /* was #1f1f1f: unreadable on the dark panel */
+.lv-side-head .ic { width: 20px; height: 20px; color: var(--muted); }
+:root[data-theme="dark"] .lv-side { background: var(--bg); }  /* the same #121212 as the panel inside it */
+:root[data-theme="dark"] .lv-side-title { font-weight: 700; }
 .lv-side iframe { display: block; width: 100%; height: 100%; border: 0; }
 /* The panel draws its own focus rings. A ring on the frame itself sat 2px outside it, half cut off by the rounded panel. */
 .lv-side iframe:focus, .lv-side iframe:focus-visible { outline: none; }

@@ -205,3 +205,14 @@
   .ib-row:hover .ib-bell, .ib-act:hover .ib-ring, .btn:hover .ib-ring { animation: none; }
   .ib-row, .ib-acts, .ib-date, .ib-act, .ib-seg-btn { transition: none; }
 }
+
+/* ==================== Spotify theme (dark, the default): Alerts ====================
+   All / Unread are pill chips (the chosen one white); rows light to #2a2a2a like track rows; the open alert keeps the
+   green-tinted selection. */
+:root[data-theme="dark"] .ib-seg { gap: 8px; padding: 0; background: transparent; }
+:root[data-theme="dark"] .ib-seg-btn { height: 32px; padding: 0 14px; border-radius: var(--r-full); background: var(--chip); color: var(--ink); font-size: 14px; }
+:root[data-theme="dark"] .ib-seg-btn:hover { background: #333333; }
+:root[data-theme="dark"] .ib-seg-btn[aria-pressed="true"] { background: var(--ink); color: #000000; box-shadow: none; font-weight: 700; }
+:root[data-theme="dark"] .ib-seg-btn[aria-pressed="true"] .ib-n { color: #000000; }
+:root[data-theme="dark"] .ib-seg-btn:focus-visible { border-radius: var(--r-full); outline-offset: 2px; }
+:root[data-theme="dark"] .ib-row:hover { background: #2a2a2a; }

@@ -181,7 +181,7 @@
       // #/calls/<id>/after, or a call that already ended: After the call (running the agent first when it hasn't run)
       const wantAfter = r.tab === "after" || (inv.ended && !(run && run.ctx && run.ctx.done));
       if (wantAfter && !(run && run.ctx && run.ctx.done)) openAfter(r.callId);
-      if (run) run.tab = r.tab === "after" && run.ctx && run.ctx.done ? "after" : "brief";
+      if (run && run.ctx && run.ctx.done) run.tab = r.tab === "after" ? "after" : "brief"; // a run still going keeps where it lands
       renderCallView(); title = inv.company;
     }
     else if (r.view === "alerts") { renderAlerts(); const a = alerts().find((x) => x.id === app.alertId); if (a) title = a.title; }
@@ -209,7 +209,7 @@
   // ---------- home ----------
   function greeting() { const h = new Date().getHours(); return (h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening") + (ME.first ? ", " + ME.first : ""); }
   // The greeting as HTML: the name gets the gradient (Asana's headline type).
-  function greetingHtml() { const g = greeting(), i = g.indexOf(", "); return i < 0 ? esc(g) : esc(g.slice(0, i + 2)) + '<span class="grad-text">' + esc(g.slice(i + 2)) + "</span>"; }
+  function greetingHtml() { const g = greeting(), i = g.indexOf(", "); return i < 0 ? esc(g) : esc(g.slice(0, i + 2)) + '<span>' + esc(g.slice(i + 2)) + "</span>"; }
 
   // First run (no calendar yet). Mobbin refs: Notion Calendar's "Connect your calendar" card (two logos, one line, one button),
   // Calendly's provider row (tile, name, account line, Connect on the right), Tana's quiet "Skip for now" link under it,
@@ -396,7 +396,7 @@
     }
     // A ring for how many briefs are ready, drawn in the hero gradient.
     const pct = total ? ready / total : 0, C2 = 2 * Math.PI * 17;
-    const ring = '<svg class="hw-ring" viewBox="0 0 40 40" aria-hidden="true"><defs><linearGradient id="hwRing" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6d63e6"/><stop offset="1" stop-color="#ee6b9a"/></linearGradient></defs>'
+    const ring = '<svg class="hw-ring" viewBox="0 0 40 40" aria-hidden="true"><defs><linearGradient id="hwRing" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1ed760"/><stop offset="1" stop-color="#ee6b9a"/></linearGradient></defs>'
       + '<circle cx="20" cy="20" r="17" class="hw-ring-track"/><circle cx="20" cy="20" r="17" class="hw-ring-fill" stroke-dasharray="' + (C2 * pct).toFixed(1) + " " + C2.toFixed(1) + '"/>'
       + '<text x="20" y="24" text-anchor="middle">' + ready + "/" + total + "</text></svg>";
     return '<div class="hero-web" aria-hidden="true"><svg class="hw-lines"></svg>'
@@ -468,7 +468,7 @@
     if (A && C) { const my = A.b + (C.t - A.b) / 2; add("hw-grey", [[A.cx, A.b], [A.cx, my], [C.cx, my], [C.cx, C.t]]); }
     if (B && D2) { const my = B.b + (D2.t - B.b) / 2; add("hw-grey", [[B.cx, B.b], [B.cx, my], [D2.cx, my], [D2.cx, D2.t]]); }
     const W = Math.round(o.width), H = Math.round(o.height);
-    const defs = '<defs><linearGradient id="hwPink" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="' + W + '" y2="0"><stop offset="0" stop-color="#6d63e6"/><stop offset="0.5" stop-color="#e05fb5"/><stop offset="1" stop-color="#f5845c"/></linearGradient>'
+    const defs = '<defs><linearGradient id="hwPink" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="' + W + '" y2="0"><stop offset="0" stop-color="#1ed760"/><stop offset="0.5" stop-color="#1db954"/><stop offset="1" stop-color="#1fdf64"/></linearGradient>'
       + '<linearGradient id="hwSoft" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="' + H + '"><stop offset="0" stop-color="#c9c5f7"/><stop offset="1" stop-color="#e3c6dc"/></linearGradient></defs>';
     svg.innerHTML = defs + lines.join("") + '<g class="hw-flows">' + flows.join("") + '</g><g class="hw-dots">' + dots.join("") + "</g>";
     // Draw in only when the page was just opened, not on every re-render or resize.
@@ -484,7 +484,7 @@
     const note = !st.server ? "MOAB's server isn't answering, or an older copy is running. Restart <code>server.py</code>, then reload."
       : !st.google.configured ? 'Google sign-in isn\'t set up on this PC yet. <a href="#/guides/google">Set it up in a few steps</a>' + ", then restart <code>server.py</code>." : "";
     return '<p class="eyebrow">' + esc(today().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })) + "</p>"
-      + '<h1 class="page-title hero-big" tabindex="-1">Every call,<br><span class="grad-text">prepped by MOAB</span></h1>'
+      + '<h1 class="page-title hero-big" tabindex="-1">Every call,<br>prepped by MOAB</h1>'
       + '<p class="hero-sub">Connect your calendar and MOAB gets you ready for each one.</p>'
       + '<div class="auth-row">' + (ok ? '<a class="auth-btn" href="/auth/google">' + G_LOGO + "<span>Google</span></a>" : '<span class="auth-btn" aria-disabled="true">' + G_LOGO + "<span>Google</span></span>")
       + '<span class="auth-btn" aria-disabled="true" title="Outlook calendar is coming soon">' + MS_LOGO + "<span>Microsoft</span></span></div>"
@@ -644,8 +644,10 @@
   const afterNext = new Set();
   function openAfter(id) {
     if (runs[id] && runs[id].ctx && runs[id].ctx.done) return false;
+    if (runningId === id) { runs[id].tab = "after"; return true; } // already running: land on After the call when it's done
+    if (runningId) { announce("Wait for the " + inviteById(runningId).company + " brief to finish."); return true; }
     afterNext.add(id);
-    if (runningId !== id) runAgent(id);
+    runAgent(id);
     return true;
   }
   async function runAgent(id) {
@@ -677,7 +679,7 @@
       renderCallView();
       $(".main").scrollTop = 0;
       window.scrollTo(0, 0);
-      const h = $("#panelBrief h1");
+      const h = run.tab === "after" ? $("#afterHead h1") : $("#panelBrief h1"); // the panel that is showing
       if (h) h.focus({ preventScroll: true });
     } else {
       if (app.view === "home") renderHome();

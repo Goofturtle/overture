@@ -177,3 +177,37 @@ body { font-size: 14px; background: var(--surface); }
 .p-listen .link-btn { font-size: 12px; }
 .p-mns .xp > summary { font-size: 12px; min-height: 24px; }
 .p-mns .xp > .xp-card { padding: 10px 12px; font-size: 12px; }
+
+/* ==================== Spotify theme (dark, the default): the in-call panel ====================
+   Like Spotify's right-hand "Now playing" panel: #121212, bold title, pill tabs (the chosen one white), the opener as
+   the one green-tinted card, talking points as rows that light to #2a2a2a, green checks with black ticks. */
+:root[data-theme="dark"] body { background: var(--bg); }
+:root[data-theme="dark"] .p-title h1 { font-size: 17px; letter-spacing: -0.015em; }
+:root[data-theme="dark"] .p-pick select { border-color: transparent; border-radius: var(--r-full); background: var(--chrome-field); padding-left: 14px; }
+:root[data-theme="dark"] .p-pick select:hover { border-color: var(--line-2); background: var(--chrome-field-hover); }
+:root[data-theme="dark"] .p-pick select:focus-visible { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
+:root[data-theme="dark"] .p-tabs { gap: 8px; align-items: center; height: 48px; border-bottom-color: var(--line); background: var(--bg); }
+:root[data-theme="dark"] .p-tabs [role="tab"] {
+  height: 32px; margin: 0; padding: 0 12px; border: 0; border-radius: var(--r-full); background: var(--chip); color: var(--ink);
+  font-weight: 600; transition: background-color var(--t-fast) ease, color var(--t-fast) ease;
+}
+:root[data-theme="dark"] .p-tabs [role="tab"]:hover { background: #333333; }
+:root[data-theme="dark"] .p-tabs [role="tab"][aria-selected="true"] { background: var(--ink); color: #000000; }
+:root[data-theme="dark"] .p-tabs [role="tab"]:focus-visible { outline-offset: 2px; border-radius: var(--r-full); }
+:root[data-theme="dark"] .p-tabs [role="tab"][aria-selected="true"] .p-count { background: #000000; color: #ffffff; }
+:root[data-theme="dark"] .p-count { background: #3e3e3e; color: var(--ink); }
+:root[data-theme="dark"] .p-sec-head h2 { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+:root[data-theme="dark"] .p-opener { border-color: transparent; background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 22%, var(--surface)) 0%, var(--surface) 75%); }
+:root[data-theme="dark"] .p-label { font-weight: 700; }
+:root[data-theme="dark"] .p-opener blockquote { font-weight: 600; }
+:root[data-theme="dark"] .p-points li + li { border-top-color: transparent; }
+:root[data-theme="dark"] :is(.p-points label, .p-person-btn) { transition: background-color var(--t-fast) ease; }
+:root[data-theme="dark"] :is(.p-points label, .p-person-btn):hover { background: #2a2a2a; }
+:root[data-theme="dark"] .p-person + .p-person { border-top-color: transparent; }
+:root[data-theme="dark"] .p-person-name { font-weight: 700; }
+:root[data-theme="dark"] .p-compose { border-color: var(--btn-line); }
+:root[data-theme="dark"] .chip-radio span { border-radius: var(--r-full); padding: 0 10px; }
+:root[data-theme="dark"] .chip-radio input:checked + span { background: var(--ink); color: #000000; box-shadow: none; }
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="dark"] :is(.p-tabs [role="tab"], .p-points label, .p-person-btn) { transition: none; }
+}
