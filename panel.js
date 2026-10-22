@@ -35,7 +35,8 @@
   const tabsShown = () => ["brief", "people", "notes"].filter((t) => t === "brief" || TAB_CARDS[t].some(cardOn)); // Brief always has At a glance
   const autoLookup = () => !window.MoabSettings || window.MoabSettings.get().mentions.autoLookup !== false;
 
-  const state = { callId: window.C.inviteById(qs.get("call")) ? qs.get("call") : D.invites.length ? D.invites[0].id : null, ctx: null, tab: "brief", inCall: null, startedAt: Date.now(), hostNote: "", ticks: new Set(), open: null };
+  // view: a guest's or a company's profile opened inside the current tab ({ kind: "person", email } or { kind: "org", name }), else null.
+  const state = { callId: window.C.inviteById(qs.get("call")) ? qs.get("call") : D.invites.length ? D.invites[0].id : null, ctx: null, tab: "brief", inCall: null, startedAt: Date.now(), hostNote: "", ticks: new Set(), open: null, view: null };
   if (HOST === "ext") {
     const m = extMatch();
     if (m) state.callId = m.id;
@@ -169,6 +170,10 @@
     ctx.people.filter((p) => p.facts.lead).forEach((p) => asks.push({ q: "Ask " + p.name.split(" ")[0] + ": " + (p.facts.lead.src === "pub" ? "how did you use Backstage before?" : "what worked at " + p.previous + "?"), why: p.facts.lead.text }));
     if (top.name === "Xirp" && top.score > 0) asks.push({ q: "How do your AI agents find who owns a service?", why: "They use AI coding agents every day." });
     if (top.name === "Confidence" && top.score > 0) asks.push({ q: "Who signs off before a test result ships?", why: "They run A/B tests on checkout." });
+    // What MOAB's research says to bring up: each guest's profile, then the company's (five at most, so the list stays short).
+    const orgP = window.C.orgInfo(ctx.invite.company).profile;
+    window.CP.forCallItems(ctx.people).map((x) => ({ q: x.b.text, why: "From " + x.name.split(" ")[0] + "'s profile" }))
+      .concat(orgP ? orgP.forCall.map((b) => ({ q: b.text, why: "From " + (orgP.name || ctx.invite.company) + "'s profile" })) : []).slice(0, 5).forEach((a) => asks.push(a));
     const done = asks.filter((a, i) => state.ticks.has("ask:" + i)).length;
     // The opener first by default: it's the line Chris says in the first ten seconds. The order and the cards come from Settings.
     const card = {};
@@ -181,7 +186,9 @@
     card.points = h;
     h = "";
     const glance = sec("At a glance", "", '<dl class="p-props">'
-      + "<dt>Company</dt><dd>" + esc(ctx.invite.company) + (c ? ' <span class="pill ' + tagFor("status", c.status) + '">' + esc(c.status) + "</span>" : "") + "</dd>"
+      + "<dt>Company</dt><dd>" + (orgP || window.C.orgInfo(ctx.invite.company).status
+        ? '<button type="button" class="link-btn pp-org-link" data-pp-org="' + esc(ctx.invite.company) + '">' + esc(orgP && orgP.name ? orgP.name : ctx.invite.company) + "</button>"
+        : esc(ctx.invite.company)) + (c ? ' <span class="pill ' + tagFor("status", c.status) + '">' + esc(c.status) + "</span>" : "") + "</dd>"
       + (top.score > 0 ? '<dt>Best fit</dt><dd><span class="pill accent">' + esc(top.name) + "</span></dd>" : "")
       + (last ? "<dt>Last talk</dt><dd>" + esc(fmtDate(last.date) + ": " + last.text) + "</dd>" : "")
       + (b ? "<dt>Backstage</dt><dd>" + esc(b.from + " · " + plural(b.behind, "release") + " behind · " + plural(b.serious, "serious notice")) + "</dd>" : "")
@@ -205,17 +212,13 @@
     const row = (p) => {
       const f = p.facts;
       const tag = f.lead ? f.lead.text.replace(/^Came from (.+?), .*/, "ex-$1") : f.isNew ? "New in job" : "";
-      const open = state.open === p.email;
-      return '<li class="p-person' + (open ? " open" : "") + '"><button type="button" class="p-person-btn" data-person="' + esc(p.email) + '" aria-expanded="' + open + '">'
+      // A guest opens their profile inside the panel (the same sections as the app's person page, folded for this width).
+      return '<li class="p-person"><button type="button" class="p-person-btn" data-person="' + esc(p.email) + '" aria-label="' + esc("Open " + p.name + "'s profile") + '">'
         + avatar(p, "md") + "<span class=\"p-person-text\"><span class=\"p-person-name\">" + esc(p.name)
         + (here(p) ? ' <span class="joined">' + ic("check") + '<span class="sr-only">in the call</span></span>' : "") + '</span><span class="p-person-sub">'
-        + esc(p.title === "Title unknown" && p.research && p.research.status === "pending" ? "Looking up…"
+        + esc(p.title === "Title unknown" && p.research && p.research.status === "pending" ? "Researching…"
           : p.title + (p.research && p.research.status === "done" && window.C.RELATION[p.research.relationship] ? " · " + window.C.RELATION[p.research.relationship] : "")) + "</span></span>"
-        + (tag ? '<span class="pill">' + esc(tag) + "</span>" : "") + "</button>"
-        + (open ? '<div class="p-person-more">' + (f.lead ? "<p><strong>" + esc(f.lead.text) + "</strong> " + esc(p.note || f.lead.tail) + "</p>" : p.note ? "<p>" + esc(p.note) + "</p>" : "")
-          + '<p class="muted-line">' + esc(tenure(p.startedAt)) + (f.unknown ? (window.C.MODE === "demo" ? " · Not in Spotify's records yet" : " · Not in MOAB's records yet") : "") + "</p>"
-          + (f.quote ? '<p class="muted-line">Public adopters list: “' + esc(f.quote) + "”</p>" : "")
-          + window.C.researchHtml(p, { actions: true, editHref: "index.html" + (window.C.MODE === "demo" ? "?demo=1" : "") + "#/calls/" + encodeURIComponent(state.callId) }) + "</div>" : "")
+        + (tag ? '<span class="pill">' + esc(tag) + "</span>" : "") + ic("chevron", "pp-row-chev") + "</button>"
         + "</li>";
     };
     const theirs = ctx.people.filter((p) => here(p) !== false), missing = ctx.people.filter((p) => here(p) === false);
@@ -281,7 +284,7 @@
   }
   // On the People tab, redraw it (and its mini map). Elsewhere, only the tab's count changes, so a note being typed is never touched.
   function refreshMentions() {
-    if (state.tab === "people") { const y = window.scrollY; render(); window.scrollTo(0, y); return; }
+    if (state.tab === "people" && !state.view) { const y = window.scrollY; render(); window.scrollTo(0, y); return; }
     const tab = $("#tab-people");
     if (!tab || !state.ctx) return;
     const n = state.ctx.people.length + mnCount();
@@ -380,6 +383,42 @@
     live.idle = setTimeout(() => { const t = now(); if (typeof t === "string" && t.trim()) sendLive(t, false, true); }, 1500);
   });
 
+  // ---------- a guest's or a company's profile, opened inside the panel (the side of the meeting) ----------
+  const panelLinks = { panel: true };
+  // What a guest's row used to unfold: the agent's key fact, your note, time in the job, and the research buttons.
+  function personTop(p) {
+    const f = p.facts;
+    return (f.lead ? '<p class="pp-key"><strong>' + esc(f.lead.text) + "</strong> " + esc(p.note || f.lead.tail) + "</p>" : p.note ? '<p class="pp-key">' + esc(p.note) + "</p>" : "")
+      + (p.startedAt ? '<p class="muted-line">' + esc(tenure(p.startedAt)) + "</p>" : "")
+      + (f.quote ? '<p class="muted-line">Public adopters list: “' + esc(f.quote) + "”</p>" : "")
+      + window.C.researchHtml(p, { actions: true, editHref: "index.html" + (window.C.MODE === "demo" ? "?demo=1" : "") + "#/calls/" + encodeURIComponent(state.callId) });
+  }
+  function viewPane() {
+    const v = state.view, back = state.tab === "people" ? "People" : "Brief";
+    if (v.kind === "person") {
+      const p = state.ctx.people.find((x) => x.email === v.email);
+      return window.CP.panelPerson(v.email, Object.assign({ back, top: p ? personTop(p) : "" }, panelLinks));
+    }
+    const block = window.CP.orgBlock(v.name, Object.assign({ fold: true, idp: "ppo", headTag: "h2" }, panelLinks));
+    return '<div class="pp"><button type="button" class="pp-back" data-pp-back>' + ic("chevronLeft") + back + "</button>"
+      + (block || '<p class="pf-state">' + ic("circleAlert") + "<span>MOAB has no public profile for " + esc(v.name) + " yet.</span></p>") + "</div>";
+  }
+  function openView(v) {
+    state.view = v;
+    render();
+    window.scrollTo(0, 0);
+    const b = $(".pp-back");
+    if (b) b.focus();
+    announce(v.kind === "person" ? "Showing " + window.CP.who(v.email).name + "'s profile." : "Showing " + v.name + ".");
+  }
+  function closeView() {
+    const v = state.view;
+    state.view = null;
+    render();
+    const back = v && (v.kind === "person" ? $('[data-person="' + CSS.escape(v.email) + '"]') : $("[data-pp-org]"));
+    if (back) back.focus();
+  }
+
   let mini = null;
   function render() {
     if (!state.ctx) {
@@ -391,19 +430,20 @@
     const panes = { brief: briefPane, people: peoplePane, notes: notesPane };
     if (!tabsShown().includes(state.tab)) state.tab = "brief";
     document.documentElement.dataset.panelDensity = panelPrefs() ? panelPrefs().density : "full";
-    $("#app").innerHTML = header() + '<div id="pane" role="tabpanel" aria-labelledby="tab-' + state.tab + '" class="p-pane">' + panes[state.tab]() + "</div>";
+    $("#app").innerHTML = header() + '<div id="pane" role="tabpanel" aria-labelledby="tab-' + state.tab + '" class="p-pane">' + (state.view ? viewPane() : panes[state.tab]()) + "</div>";
     if (mini) { mini.destroy(); mini = null; }
-    if (state.tab === "people" && window.CMap && $("#miniMap")) mini = window.CMap.mount($("#miniMap"), { mode: "stack", callId: state.callId, compact: true });
+    if (state.tab === "people" && !state.view && window.CMap && $("#miniMap")) mini = window.CMap.mount($("#miniMap"), { mode: "stack", callId: state.callId, compact: true });
   }
 
   function setTab(t, focus) {
     state.tab = t;
+    state.view = null;
     render();
     if (focus) $("#tab-" + t).focus();
   }
 
-  // Research results (found automatically) and the Confirm / Look up again buttons.
-  function refreshPeople(emails) {
+  // Research results (found automatically) and the Confirm / Look up again buttons. domains: companies whose research changed.
+  function refreshPeople(emails, domains) {
     if (!state.ctx) return;
     let hit = false;
     state.ctx.people.forEach((p) => {
@@ -413,7 +453,9 @@
       p.facts = window.C.personFacts(p);
       hit = true;
     });
-    if (hit && state.tab === "people") render();
+    const v = state.view, orgHit = (domains || []).includes(window.C.orgDomain(state.ctx.invite.company));
+    const redraw = v ? (v.kind === "person" ? emails.includes(v.email) || orgHit : orgHit) : (hit && state.tab === "people") || (orgHit && state.tab === "brief");
+    if (redraw) { const y = window.scrollY; render(); window.scrollTo(0, y); }
   }
   async function researchAction(btn) {
     const confirm = btn.hasAttribute("data-rs-confirm"), email = confirm ? btn.dataset.rsConfirm : btn.dataset.rsAgain;
@@ -437,10 +479,19 @@
     const ma = e.target.closest("[data-mn-act]");
     if (ma) { mnAct(ma); return; }
     if (e.target.closest("[data-mt-pick]")) { meetilyPick(); return; }
+    // Profiles inside the panel: a guest, a company, the way back, and a connection's card.
+    if (e.target.closest("[data-pp-back]")) { closeView(); return; }
+    const pp = e.target.closest("[data-pp-person]");
+    if (pp) { const em = window.C.emailForKey(pp.dataset.ppPerson); if (em) openView({ kind: "person", email: em }); return; }
+    const po = e.target.closest("[data-pp-org]");
+    if (po) { openView({ kind: "org", name: po.dataset.ppOrg }); return; }
+    const row = e.target.closest(".pm-row[data-pm]");
+    if (row && state.view && state.view.kind === "person") { window.CP.toggleRow(row, window.CP.graph(state.view.email), panelLinks); return; }
     const p = e.target.closest("[data-person]");
-    if (p) { state.open = state.open === p.dataset.person ? null : p.dataset.person; render(); const again = $('[data-person="' + p.dataset.person + '"]'); if (again) again.focus(); }
+    if (p) openView({ kind: "person", email: p.dataset.person });
   });
   document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && state.view && !e.target.closest("textarea, input, select")) { closeView(); return; }
     const tab = e.target.closest("[role=tab]");
     if (!tab || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
     const order = tabsShown();
@@ -451,7 +502,7 @@
     if (e.target.id === "callPick") {
       clearTimeout(live.timer); clearTimeout(live.idle);
       if (live.seg && (live.draft.trim() || live.sent)) sendLive(live.draft.trim() ? live.draft : live.sent, true, false); // the old call's note is done: the server drops its text now
-      state.callId = e.target.value; state.open = null;
+      state.callId = e.target.value; state.open = null; state.view = null;
       Object.assign(live, { seg: "", sent: "", next: null, paused: "", draft: "" });
       await prepare(); await loadMentions(); render(); announce("Showing " + window.C.inviteById(state.callId).company + ".");
       if (mt.st && mt.st.recording) meetilyPick(); // the call picked here is the one Meetily is recording
@@ -493,7 +544,8 @@
     await prepare();
     await loadMentions();
     render(); // show something at once; the host connection only adds to it
-    window.C.watchResearch(() => (state.ctx && state.tab === "people" ? state.ctx.people.map((p) => p.email) : []), refreshPeople);
+    window.C.watchResearch(() => (state.view && state.view.kind === "person" ? [state.view.email] : state.ctx && state.tab === "people" ? state.ctx.people.map((p) => p.email) : []),
+      refreshPeople, () => (state.ctx ? [state.ctx.invite.company] : []));
     meetilyPoll();
     try {
       if (HOST === "meet") await within(connectMeet(), 9000); // Meet expects a session within about 10 s

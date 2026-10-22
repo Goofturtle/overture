@@ -144,9 +144,9 @@ them in this browser only. Restart `server.py` after updating, or the page can't
 | Account priorities | Target accounts and scoring rules with points (engineers above N, on the adopters list, open deal, recent alert, customer) give a Hot / Warm / Cold badge; Home's "Coming up" and Companies sort by it; Calls has a **By priority** view |
 | In-call panel | Which cards show and their order (a tab hides when all its cards are off), compact or full, a live-listening reminder (while Meetily is off), the keyboard shortcuts |
 | Follow-up emails | A template per call type (intro, discovery, demo, renewal, other) with `{first_name} {company} {my_name} {next_step} {summary} {date}`. **Draft follow-up** in After the call fills it from the call and your notes; **Copy** or **Open in mail app**. MOAB never sends email |
-| Mentions and connections | Automatic look-up (off: notes as you type are refused by the server, and names heard through Meetily are listed but not looked up until you press **Look up on the web**; transcripts you add after the call still are), which kinds of mentioned connections the People map draws, the auto-add rule (only clear matches, or also the most likely match, marked "Likely" on the map) and how long the call's sentences are kept (older ones are dropped; the mention, its relation and web sources stay) |
+| Mentions and connections | Automatic look-up (off: notes as you type are refused by the server, and names heard through Meetily or read from Granola by MOAB itself after the call are listed but not looked up until you press **Look up on the web**, even ones already waiting to be looked up; transcripts you add after the call, and **Read Granola's note**, still are), which kinds of mentioned connections the People map draws, the auto-add rule (only clear matches, or also the most likely match, marked "Likely" on the map) and how long the call's sentences are kept (older ones are dropped, also before the People map loads and as soon as you lower it, and Granola's summary with them; the mention, its relation and web sources stay) |
 | Alert rules | Which signals make alerts (job changes, new invitees, people mentioned, security notices, new Backstage release, HubSpot stage changes), the security level, instant or a daily digest (one card per day on Home, one section per day on Alerts), quiet hours (the badge and pop-ups wait) |
-| Research sources and privacy | Web research (off also stops lookups of people and companies mentioned on a call; queued ones are dropped unsent), HubSpot, Gong, Meetily and Granola (both off by default) on or off, the three former Data-page switches, what may go to Claude (titles only / + call notes / + transcripts), extra blocked sites on top of the built-in list |
+| Research sources and privacy | Web research (off also stops lookups of people and companies mentioned on a call; queued ones, guests' too, are dropped unsent), HubSpot, Gong, Meetily and Granola (both off by default) on or off, the three former Data-page switches, what may go to Claude (titles only / + call notes / + transcripts), extra blocked sites on top of the built-in list |
 | Appearance | Light or dark, accent colour (indigo, green, blue, pink, orange), comfortable or compact; set before the first paint |
 
 ## How they're connected (click to explain)
@@ -156,7 +156,9 @@ person or company), in After the call and in the in-call panel's People tab (**H
 one to three plain sentences on what the connection is (what, for which team or product, since when), each numbered to its source,
 short quotes from those sources (25 words at most) with links and dates, what was said on the call, where and when it was found, and
 the confidence. Claude's answer must cite a source for every sentence; a sentence whose sources were dropped (blocked, or never in
-the search results) is dropped too, so with nothing left the card shows only the relation type. Results saved before this still show.
+the search results, or a site you block later) is dropped too, so with nothing left the card shows only the relation type. A quote
+shows only when the web search's own citations of that page hold those words, and the date is the one the search gave for the
+page, never only Claude's word. Results saved before this still show.
 
 ## Live and after-call sources, and the Chrome side panel
 

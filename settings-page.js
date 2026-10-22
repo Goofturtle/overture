@@ -217,6 +217,8 @@
       const r = await fetch("/api/claude-key", { headers: { "X-MOAB": "1" } }), j = await r.json();
       st.textContent = (msg ? msg + " " : "") + (j.saved ? (j.source === "env" ? "Using the key from the ANTHROPIC_API_KEY setting (ends in " + j.last4 + ")." : "Key saved on this PC (ends in " + j.last4 + "). Web lookups are on.") : "No key yet. Web lookups and Ask MOAB answers are off.");
       st.classList.toggle("ok", !!j.saved);
+      // The box empties after a save so the key never sits on screen; show that it's saved instead of looking wiped.
+      const inp = $("#claudeKey"); if (inp) inp.placeholder = j.saved ? "•••••••••••• " + j.last4 + "  (saved: paste a new key to replace it)" : "sk-ant-…";
       const rm = $("#claudeKeyRemove"); if (rm) rm.hidden = !(j.saved && j.source === "file");
     } catch (e) { st.textContent = "MOAB's server isn't answering."; }
   }

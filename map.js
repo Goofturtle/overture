@@ -25,7 +25,7 @@
     return a;
   }
 
-  const SIZE = { person: [240, 60], past: [216, 52], you: [172, 44] };
+  const SIZE = { person: [240, 60], past: [216, 52], you: [256, 44] };
   const FRAME = { w: 276, head: 56, pad: 18, gapY: 14, gapX: 120, colGap: 150 };
   // Narrow in-call panel: smaller cards in two columns, so text stays readable at panel width.
   const SIZE_C = { person: [172, 50], past: [186, 44], you: [128, 38] };

@@ -28,6 +28,7 @@
   let runningId = null;
   const readAlerts = new Set();
   let mapInstance = null;
+  let personMap = null; // the connection map on a person's page (profile.js)
   D.invites.forEach((inv) => { inputs[inv.id] = store.get("inputs:" + inv.id) || { versionFile: inv.versionFile || "", since: inv.backstageSince || null }; });
 
   const inviteById = C.inviteById;
@@ -120,7 +121,7 @@
       + link("#/alerts", "bell", "Alerts", unread ? '<span class="count strong">' + unread + '<span class="sr-only"> unread</span></span>' : "", cur === "alerts")
       + link("#/live", "video", "In call", "", cur === "live");
     $("#navRecords").innerHTML = link("#/companies", "building", "Companies", '<span class="count">' + companyNames().length + "</span>", cur === "companies" || cur === "company")
-      + link("#/map", "network", "People", '<span class="count">' + Object.keys(D.people).length + "</span>", cur === "map");
+      + link("#/map", "network", "People", '<span class="count">' + Object.keys(D.people).length + "</span>", cur === "map" || cur === "people");
     // Asana's sidebar projects: this week's calls, each with its company colour.
     $("#navWeekLabel").hidden = !D.invites.length;
     $("#navWeek").innerHTML = D.invites.map((i) => '<li><a href="#/calls/' + i.id + '" title="' + esc(i.company + ", " + splitWhen(i.when).day) + '"' + (cur === "call" && app.callId === i.id ? ' aria-current="page"' : "")
@@ -130,7 +131,7 @@
   }
 
   // ---------- router ----------
-  const TITLES = { home: "Home", calls: "Calls", alerts: "Alerts", companies: "Companies", map: "People map", live: "In-call panel", data: "Data", settings: "Settings" };
+  const TITLES = { home: "Home", calls: "Calls", alerts: "Alerts", companies: "Companies", map: "People map", people: "Person", live: "In-call panel", data: "Data", settings: "Settings" };
   function parse() {
     const h = location.hash;
     if (!h.startsWith("#/")) return null;
@@ -139,7 +140,7 @@
     if (p[0] === "calls") return p[1] && inviteById(p[1]) ? { view: "call", callId: p[1], tab: p[2] === "after" ? "after" : "brief" } : { view: "calls" };
     if (p[0] === "alerts") return { view: "alerts", alertId: p[1] || null };
     if (p[0] === "companies") return p[1] ? { view: "company", slug: p[1] } : { view: "companies" };
-    if (p[0] === "people") return { view: "map" };
+    if (p[0] === "people") return p[1] ? { view: "people", key: p[1] } : { view: "map" }; // #/people/<key>: one guest's profile (the key is never their email)
     if (p[0] === "settings") return { view: "settings", menu: p[1] || null };
     if (["map", "live", "data"].includes(p[0])) return { view: p[0] };
     return { view: "home", bad: true };
@@ -158,7 +159,9 @@
     editingPerson = null;
     editingCompany = null;
     if (mapInstance && r.view !== "map") { mapInstance.destroy(); mapInstance = null; }
+    if (personMap) { personMap.destroy(); personMap = null; }
     app.view = r.view;
+    app.personKey = r.key || null;
     if (r.callId) app.callId = r.callId;
     app.alertId = r.alertId || null;
     app.slug = r.slug || null;
@@ -177,6 +180,7 @@
     else if (r.view === "companies") renderCompanies();
     else if (r.view === "company") { const name = companyBySlug(app.slug); if (!name) { go("#/companies", true); return; } renderCompany(name); title = name; }
     else if (r.view === "map") renderMap();
+    else if (r.view === "people") { const email = C.emailForKey(app.personKey); if (!email) { go("#/map", true); return; } title = renderPerson(email); }
     else if (r.view === "live") renderLive();
     else if (r.view === "data") renderData();
     else if (r.view === "settings" && window.MoabSettingsPage) title = window.MoabSettingsPage.render(r.menu) || title;
@@ -749,17 +753,19 @@
   function renderBrief(run) {
     const ctx = run.ctx, inv = ctx.invite, b = ctx.bill, c = ctx.company, top = ctx.products[0], w = splitWhen(inv.when);
     const bp = C.prefs() ? C.prefs().brief : { sections: [], length: "full" }, short = bp.length === "short";
+    const org = C.orgInfo(inv.company); // what MOAB's research found about the company (profile.js draws it)
     const detail = c && /: /.test(c.status) ? '<span class="muted">' + esc(c.status.replace(/^[^:]*: /, "")) + "</span>" : "";
     let html = '<header class="brief-head"><div class="title-row"><h1 tabindex="-1">' + esc(inv.company) + "</h1>"
       + (top.score > 0 ? '<span class="pill accent">Best fit: ' + esc(top.name) + "</span>" : "") + C.priorityBadge(inv.company) + "</div>"
       + '<dl class="props"><dt>When</dt><dd>' + esc(w.day + " " + w.month + " " + w.date + " · " + w.time) + "</dd>"
       + '<dt>Kind</dt><dd><span class="pill">' + esc(kindOf(inv)) + "</span></dd>"
+      + (org.profile ? '<dt>Company</dt><dd><a href="#company" data-jump="company">' + esc(org.profile.name || inv.company) + "</a>" + (org.domain ? '<span class="muted">' + esc(org.domain) + "</span>" : "") + "</dd>" : "")
       + (c ? "<dt>Status</dt><dd>" + statusTag(c.status) + detail + (fromHubspot(c, "status") ? srcTag("HubSpot") : "") + "</dd>" : "")
       + (c && c.engineers ? "<dt>Size</dt><dd>About " + esc(c.engineers) + " engineers</dd>"
         : c && c.employees ? "<dt>Size</dt><dd>About " + esc(Number(c.employees).toLocaleString("en-US")) + " employees" + srcTag("HubSpot") + "</dd>" : "")
       + (c && c.deals && c.deals.length ? "<dt>Deals</dt><dd>" + dealsHtml(c.deals) + "</dd>" : "")
       + (c && c.notes && !short ? "<dt>Notes</dt><dd>" + esc(c.notes) + "</dd>" : "")
-      + "<dt>On the call</dt><dd>" + inv.attendees.map((a) => '<span class="who-chip">' + avatar(a, "sm") + esc(a.name) + "</span>").join("") + "</dd></dl></header>";
+      + "<dt>On the call</dt><dd>" + inv.attendees.map((a) => '<a class="who-chip" href="#/people/' + esc(C.personKey(a.email)) + '">' + avatar(a, "sm") + esc(a.name) + "</a>").join("") + "</dd></dl></header>";
     html += '<details class="how" id="how"><summary>' + ic("circleCheck", "ok") + '<span>How the agent built this</span><span class="how-meta" id="howMeta">' + esc(howMeta(run)) + "</span>"
       + ic("chevron", "chev") + '</summary><div id="howSteps"></div></details>';
     const edit = '<button type="button" class="ghost-edit" data-open="drawer">' + ic("pencil") + "Edit</button>";
@@ -807,24 +813,36 @@
             + '<span class="muted-line muted-date">' + esc(fmtDate(a.published)) + "</span></li>").join("") + "</ul>"
           + (b.open.length > worst.length ? '<p class="muted-line">' + plural(b.open.length - worst.length, "more notice") + " open.</p>" : "") + "</section>";
       },
-      todos: () => '<section class="sec" id="todo">' + secHead("Before the call", SRC.records)
-        + (ctx.todos.length ? '<ul class="todos" role="list">' + ctx.todos.map((t) => '<li><label><input type="checkbox" data-call="' + esc(inv.id) + '" data-todo="' + esc(t.text) + '"' + (run.ticks.has(t.text) ? " checked" : "") + "><span>" + esc(t.text) + "</span></label>"
-          + (t.link ? '<a class="todo-link" href="' + t.link.href + '" data-jump="' + t.link.href.slice(1) + '">' + esc(t.link.label) + "</a>" : "") + (t.src ? srcTag(t.src) : "") + "</li>").join("") + "</ul>"
-          : '<p class="empty-note">' + (DEMO ? "Nothing to send. The papers are in order." : "Nothing to do before this call.") + "</p>") + "</section>",
-      people: () => '<section class="sec" id="people">' + secHead("Who's on the call", SRC.records, '<a class="ghost-edit" href="#/map">' + ic("network") + "Map</a>") + '<ul class="people" role="list">' + ctx.people.map((p) => {
-        if (editingPerson === p.email) return personForm(p);
-        const f = p.facts;
-        const key = f.lead ? "<strong>" + esc(f.lead.text) + "</strong> " + esc(p.note || f.lead.tail) : esc(p.note || (f.unknown ? (DEMO ? "Not in Spotify's records yet." : "Not in MOAB's records yet.") : ""));
-        const bits = [C.tenure(p.startedAt) + (f.isNew ? ", and new leaders often want change" : "")];
-        if (f.unknown && (f.lead || p.note)) bits.push(DEMO ? "Not in Spotify's records yet" : "Not in MOAB's records yet");
-        const auto = !!(p.research && p.research.status === "done" && p.research.found === "auto");
-        const pedit = LIVE_MODE && !auto ? '<button type="button" class="ghost-edit p-edit" data-edit-person="' + esc(p.email) + '" aria-label="' + esc("Edit " + p.name + "'s title and note") + '">' + ic("pencil") + "Edit</button>" : "";
-        return '<li class="person">' + avatar(p, "lg") + "<div>"
-          + '<p class="p-name"><strong>' + esc(p.name) + "</strong> <span>· " + esc(p.title) + "</span>" + (p.titleSrc === "HubSpot" ? srcTag("HubSpot") : "") + pedit + "</p>"
-          + (key ? '<p class="p-key">' + key + "</p>" : "") + (short ? "" : '<p class="p-meta">' + esc(bits.join(" · ")) + "</p>")
-          + C.researchHtml(p, { actions: true, edit: true })
-          + (f.quote && !short ? '<p class="p-quote">From the public adopters list: “' + esc(f.quote) + "”</p>" : "") + "</div></li>";
-      }).join("") + "</ul></section>",
+      // Real to-dos (papers, rivals), then what each guest's profile says to bring up. Hidden when there is neither.
+      todos: () => {
+        const bring = window.CP.forCallHtml(ctx.people, profileLinks);
+        if (!ctx.todos.length && !bring) return "";
+        return '<section class="sec" id="todo">' + secHead(ctx.todos.length ? "Before the call" : "Bring up on the call", ctx.todos.length ? SRC.records : DEMO ? "Sample data" : "Found by MOAB")
+          + (ctx.todos.length ? '<ul class="todos" role="list">' + ctx.todos.map((t) => '<li><label><input type="checkbox" data-call="' + esc(inv.id) + '" data-todo="' + esc(t.text) + '"' + (run.ticks.has(t.text) ? " checked" : "") + "><span>" + esc(t.text) + "</span></label>"
+            + (t.link ? '<a class="todo-link" href="' + t.link.href + '" data-jump="' + t.link.href.slice(1) + '">' + esc(t.link.label) + "</a>" : "") + (t.src ? srcTag(t.src) : "") + "</li>").join("") + "</ul>" : "")
+          + (bring ? (ctx.todos.length ? '<h3 class="pf-sub-h">Bring up on the call</h3>' : "") + bring : "") + "</section>";
+      },
+      // The company as MOAB's research found it (or "Researching…"), then each guest with their compact profile.
+      people: () => {
+        const about = window.CP.orgBlock(inv.company, Object.assign({ heading: false, idp: "bco", level: 2 }, profileLinks));
+        const aboutSec = about ? '<section class="sec pf-org-sec" id="company">' + secHead("About " + esc(org.profile && org.profile.name ? org.profile.name : inv.company), "",
+          companyBySlug(slug(inv.company)) ? '<a class="ghost-edit" href="#/companies/' + slug(inv.company) + '">' + ic("building") + "Company</a>" : "") + about + "</section>" : "";
+        return aboutSec + '<section class="sec" id="people">' + secHead("Who's on the call", SRC.records, '<a class="ghost-edit" href="#/map">' + ic("network") + "Map</a>") + '<ul class="people" role="list">' + ctx.people.map((p) => {
+          if (editingPerson === p.email) return personForm(p);
+          const f = p.facts, found = !!C.personInfo(p.email).profile;
+          const key = f.lead ? "<strong>" + esc(f.lead.text) + "</strong> " + esc(p.note || f.lead.tail) : esc(p.note || (f.unknown && !found ? (DEMO ? "Not in Spotify's records yet." : "Not in MOAB's records yet.") : ""));
+          const bits = [C.tenure(p.startedAt) + (f.isNew ? ", and new leaders often want change" : "")];
+          if (f.unknown && !found && (f.lead || p.note)) bits.push(DEMO ? "Not in Spotify's records yet" : "Not in MOAB's records yet");
+          const auto = !!(p.research && p.research.status === "done" && p.research.found === "auto");
+          const pedit = LIVE_MODE && !auto ? '<button type="button" class="ghost-edit p-edit" data-edit-person="' + esc(p.email) + '" aria-label="' + esc("Edit " + p.name + "'s title and note") + '">' + ic("pencil") + "Edit</button>" : "";
+          return '<li class="person">' + avatar(p, "lg") + "<div>"
+            + '<p class="p-name"><a class="pf-name-link" href="#/people/' + esc(C.personKey(p.email)) + '"><strong>' + esc(p.name) + "</strong></a> <span>· " + esc(p.title) + "</span>" + (p.titleSrc === "HubSpot" ? srcTag("HubSpot") : "") + pedit + "</p>"
+            + (key ? '<p class="p-key">' + key + "</p>" : "") + (short ? "" : '<p class="p-meta">' + esc(bits.join(" · ")) + "</p>")
+            + (short ? "" : window.CP.briefPerson(p.email, profileLinks))
+            + C.researchHtml(p, { actions: true, edit: true })
+            + (f.quote && !short ? '<p class="p-quote">From the public adopters list: “' + esc(f.quote) + "”</p>" : "") + "</div></li>";
+        }).join("") + "</ul></section>";
+      },
       rivals: () => (ctx.rivals.length ? '<section class="sec" id="rivals">' + secHead("Rivals", ctx.rivals.some((r) => r.source) ? "Public data" : "Agent's notes") + ctx.rivals.map((r) => '<div class="rival">'
         + '<p class="rival-name">' + esc(r.name) + (r.source ? ' · <a href="' + esc(r.source.url) + '" target="_blank" rel="noopener">' + esc(r.source.label) + ic("link", "ext") + NEW_TAB + "</a>" : "") + "</p>"
         + r.facts.map((f) => "<p>" + esc(f) + "</p>").join("")
@@ -886,7 +904,17 @@
     if (hubspotOn() && hsCalls[app.callId]) refreshHubspotPlan(app.callId); // a new title can be offered to HubSpot
   }
   // Research results (found automatically) reach every open brief: the call's people are copies made when the agent ran.
-  function refreshPeople(emails) {
+  // domains: companies whose research changed (GET /api/research's orgs); the page showing one of them redraws too.
+  function refreshPeople(emails, domains) {
+    domains = domains || [];
+    const orgHit = (name) => !!name && domains.includes(C.orgDomain(name));
+    if (app.view === "people") {
+      const email = C.emailForKey(app.personKey), w = email ? window.CP.who(email) : null;
+      if (w && (emails.includes(email) || orgHit(w.company))) { const y = $(".main").scrollTop; renderPerson(email); $(".main").scrollTop = y; }
+    }
+    if (app.view === "company" && orgHit(companyBySlug(app.slug)) && !editingCompany) renderCompany(companyBySlug(app.slug));
+    const cur = runs[app.callId];
+    if (app.view === "call" && !editingPerson && cur && cur.ctx && cur.ctx.done && orgHit(cur.ctx.invite.company) && !cur.ctx.people.some((p) => emails.includes(p.email))) renderBrief(cur);
     Object.values(runs).forEach((r) => {
       if (!r.ctx || !r.ctx.people) return;
       r.ctx.people.forEach((p) => {
@@ -1660,7 +1688,9 @@
     const age = relDay(Math.round((ibTime(a) - today().getTime()) / 864e5));
     const w = inv ? splitWhen(inv.when) : null;
     const nextCall = inv ? "<p>Your " + esc(inv.company) + " call is " + esc(longDay(inv)) + " at " + esc(w.start) + ", " + esc(relDay(daysUntil(inv))) + ".</p>" : "";
+    const guest = inv && a.kind === "New person" ? inv.attendees.find((x) => x.name === a.person) : null;
     const actions = inv ? '<a class="btn primary" href="#/calls/' + inv.id + '">' + ic("phone", "ib-ring") + "Open the " + esc(inv.company) + " call</a>"
+        + (guest ? '<a class="btn secondary" href="#/people/' + esc(C.personKey(guest.email)) + '">Open ' + esc(guest.name.split(" ")[0]) + "'s profile</a>" : "")
         + '<a class="btn secondary" href="#/companies/' + slug(inv.company) + '">Open ' + esc(inv.company) + "</a>"
       : '<button type="button" class="btn primary" data-open="check" data-focus="anyVersion">Check a Backstage version</button>';
     return '<article class="ib-read" aria-labelledby="ibTitle"><div class="ib-bar">'
@@ -1681,9 +1711,9 @@
         + (ch.also ? '<dt>Also affects</dt><dd><a href="#/companies/' + slug(ch.also) + '">' + esc(ch.also) + "</a></dd>" : "")
         + '<dt>Call</dt><dd><a href="#/calls/' + inv.id + '">' + esc(w.day + " " + w.month + " " + w.date + " · " + w.start) + "</a></dd></dl></section>" : "")
       + '<p class="ib-prov">' + (a.kind === "New release" ? "From Backstage's releases on GitHub." : a.kind === "Stage change" ? "From your HubSpot: the deal stage changed since MOAB last looked."
-        : a.kind === "Mentioned" ? "From the people mentioned on the call (your transcript or notes). Check who they are before you rely on it."
+        : a.kind === "Mentioned" ? "From the people mentioned on the call (your transcript or notes). MOAB looks them up and cites its sources on the call page."
         : a.src === "Public data" ? "From GitHub's public security advisories for Backstage. Saved copy from " + esc(fmtDate(SNAP.takenOn)) + "." : DEMO ? "Sample alert, made up for this demo. It stands in for a job-change and hiring feed."
-        : a.kind === "New person" ? "MOAB looked this guest up on its own, from their name and company only, using public work sources. Check it before you rely on it."
+        : a.kind === "New person" ? "MOAB looked this guest up on its own, from their name and company only, using public work sources. Every fact on their profile names its source."
         : "Worked out by MOAB from your Google Calendar: this invite compared with your past meetings.") + "</p></div></article>";
   }
   // Draws both panes. Focus survives the redraw: the same control (data-k) gets it back, else the list heading.
@@ -1867,7 +1897,8 @@
     });
     return html + "</ol>";
   }
-  const coPerson = (p, sub, side, note) => '<li class="co-person">' + avatar(p, "md") + '<div class="co-person-text"><p class="co-person-name">' + esc(p.name) + '</p><p class="co-person-sub">' + sub + "</p>"
+  const coPerson = (p, sub, side, note) => '<li class="co-person">' + avatar(p, "md") + '<div class="co-person-text"><p class="co-person-name">'
+    + (p.email ? '<a class="pf-name-link" href="#/people/' + esc(C.personKey(p.email)) + '">' + esc(p.name) + "</a>" : esc(p.name)) + '</p><p class="co-person-sub">' + sub + "</p>"
     + (note ? '<p class="co-person-note">' + note + "</p>" : "") + '</div><div class="co-person-side">' + side + "</div></li>";
   const coProp = (k, v) => "<dt>" + k + "</dt><dd>" + v + "</dd>";
 
@@ -1888,6 +1919,9 @@
         + '<p class="co-focus-who">' + coFaces(inv.attendees, "xs") + "<span>" + esc(names(inv)) + "</span></p></div>"
         + '<div class="co-focus-side">' + prepChip(inv.id) + "</div></div></section>";
     }
+    // What MOAB's research found about the company (profile.js): its real name, summary, key facts, news and sources.
+    const about = window.CP.orgBlock(name, Object.assign({ idp: "co", level: 2 }, profileLinks));
+    if (about) main += '<section class="co-sec pf-org-sec" aria-label="' + esc("About " + name) + '">' + about + "</section>";
     const gong = C.gongFor(name);
     if (gong) main += '<section class="co-sec" aria-labelledby="coGongH"><div class="sec-head"><h2 id="coGongH">Last call in Gong</h2>' + srcTag("Gong") + "</div>" + C.gongHtml(gong) + "</section>";
     if (staff.length || alumni.length) {
@@ -1940,6 +1974,17 @@
       + '<div class="co-rbody"><div class="co-rmain">' + main + '</div><aside class="co-panel" aria-label="' + esc(name) + ' details">' + side + "</aside></div></div>";
   }
 
+  // ---------- a person's page (#/people/<key>): profile.js draws it, this wires its connection map ----------
+  const profileLinks = { companyHref: (name) => (companyBySlug(slug(name)) ? "#/companies/" + slug(name) : "") };
+  function renderPerson(email) {
+    const CP = window.CP, g = CP.graph(email);
+    const conn = g.nodes.length > 1 ? '<section class="pf-sec" aria-labelledby="pf-conn"><h2 class="pf-h" id="pf-conn">Connections</h2>' + CP.mapHtml(g) + "</section>" : "";
+    $('[data-view="people"]').innerHTML = CP.pageHtml(email, Object.assign({ canAgain: LIVE_MODE, connections: conn }, profileLinks));
+    if (personMap) personMap.destroy();
+    personMap = conn ? CP.mountMap($('[data-view="people"] [data-pm-root]'), g, Object.assign({ page: true }, profileLinks)) : null;
+    return CP.who(email).name;
+  }
+
   // ---------- people map ----------
   function insights() {
     const g = C.relationshipGraph(), byId = Object.fromEntries(g.nodes.map((n) => [n.id, n]));
@@ -1956,13 +2001,19 @@
     }
     const n = d.node;
     const kindWord = { warm: "Warm link", moved: "Past job or talk", together: "Worked together", works: "Works there", mentioned: "Mentioned on a call" };
+    // What MOAB found about this guest or company (profile.js), above the list of links.
+    const guest = n.type === "person" && n.id.startsWith("p:") ? n.id.slice(2) : "";
+    const found = guest ? window.CP.briefPerson(guest, profileLinks) || C.researchHtml(Object.assign({ name: n.label, email: guest }, D.people[guest] || {}))
+      : n.type === "prospect" || n.type === "past" ? window.CP.orgMini(n.label, profileLinks) : "";
     return '<h2 tabindex="-1" id="mapSideH">' + esc(n.label) + '</h2><p class="meta">' + esc([n.sub, n.status].filter(Boolean).join(" · ")) + "</p>"
+      + found
       + '<ul class="rel" role="list">' + d.rels.map((r) => '<li><div class="rel-top"><span class="rel-kind ' + esc(r.kind) + '" aria-hidden="true"></span><strong>' + esc(r.other) + '</strong><span class="src ' + (r.src === "pub" ? "public" : DEMO ? "sample" : "yours") + '"><span class="sr-only">' + (r.src === "pub" ? "Public data" : SRC.records) + "</span></span></div>"
         + "<p>" + esc((kindWord[r.kind] || "") + (r.label && r.kind !== "works" ? " · " + r.label : "") + (r.why ? ". " + r.why : "")) + "</p>"
         + (r.kind === "mentioned" && r.explain ? C.explainFold(r.explain, { open: true }) : "")
         + (r.kind === "mentioned" && r.mentionId ? '<p><button type="button" class="link-btn" data-conn-remove="' + esc(r.connId) + '">Remove this connection</button></p>' : "") + "</li>").join("") + "</ul>"
-      + '<div class="side-actions">' + (d.callId ? '<a class="btn secondary sm" href="#/calls/' + d.callId + '">' + ic("arrowRight") + "Open the call</a>" : "")
-      + (n.type === "prospect" || n.type === "past" ? '<a class="btn ghost sm" href="#/companies/' + slug(n.label) + '">Company page</a>' : "")
+      + '<div class="side-actions">' + (guest ? '<a class="btn secondary sm" href="#/people/' + esc(C.personKey(guest)) + '">' + ic("arrowRight") + "Open profile</a>" : "")
+      + (d.callId ? '<a class="btn ' + (guest ? "ghost" : "secondary") + ' sm" href="#/calls/' + d.callId + '">' + (guest ? "" : ic("arrowRight")) + "Open the call</a>" : "")
+      + ((n.type === "prospect" || n.type === "past") && companyBySlug(slug(n.label)) ? '<a class="btn ghost sm" href="#/companies/' + slug(n.label) + '">Open company</a>' : "")
       + (n.type === "person" ? '<a class="btn ghost sm" href="#/companies/' + slug(inviteById(n.callId).company) + '">Their company</a>' : "") + "</div>";
   }
   function renderMap() {
@@ -2705,7 +2756,15 @@
       });
     }
     route();
-    C.watchResearch(() => { const r = runs[app.callId]; return app.view === "call" && r && r.ctx && r.ctx.done ? r.ctx.people.map((p) => p.email) : []; }, refreshPeople);
+    C.watchResearch(() => {
+      if (app.view === "people") { const e = C.emailForKey(app.personKey); return e ? [e] : []; }
+      const r = runs[app.callId]; return app.view === "call" && r && r.ctx && r.ctx.done ? r.ctx.people.map((p) => p.email) : [];
+    }, refreshPeople, () => {
+      if (app.view === "call") return [inviteById(app.callId).company];
+      if (app.view === "company") return [companyBySlug(app.slug)];
+      if (app.view === "people") { const e = C.emailForKey(app.personKey); return e ? [window.CP.who(e).company] : []; }
+      return [];
+    });
     C.refreshLive().then(() => { renderNav(); if (app.view === "data") renderData(); });
     C.claudeChecked.then(() => { if (app.view === "data") renderData(); if (app.view === "home" && !D.invites.length) renderHome(); });
     C.deviceChecked.then(() => { if (app.view === "data") renderData(); });

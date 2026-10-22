@@ -21,6 +21,7 @@
   <link rel="stylesheet" href="companies.css">
   <link rel="stylesheet" href="mentions.css">
   <link rel="stylesheet" href="settings.css">
+  <link rel="stylesheet" href="profile.css">
   <script>
     // Settings > Appearance before the first paint (settings.js keeps this copy up to date), so a dark page never flashes white.
     try { var a = JSON.parse(localStorage.getItem(/[?&]demo=1(&|$)/.test(location.search) ? "centralize:appearance:demo" : "centralize:appearance") || "null"); if (a) { var r = document.documentElement; r.dataset.theme = a.theme; r.dataset.accent = a.accent; r.dataset.density = a.density; r.style.colorScheme = a.theme; } } catch (e) {}
@@ -114,7 +115,7 @@
       <section data-view="live" class="page wide" hidden></section>
       <section data-view="companies" class="page" hidden></section>
       <section data-view="company" hidden></section>
-      <section data-view="people" class="page" hidden></section>
+      <section data-view="people" class="person-view" hidden></section>
       <section data-view="data" class="page narrow" hidden></section>
       <section data-view="settings" class="page settings-view" hidden></section>
     </main>
@@ -201,6 +202,7 @@
   <script src="data/live.js"></script><!-- server.py: your calendar + MOAB records, or null -->
   <script src="settings.js"></script>
   <script src="core.js"></script>
+  <script src="profile.js"></script>
   <script src="map.js"></script>
   <script src="app.js"></script>
   <script src="settings-page.js"></script>

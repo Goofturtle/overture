@@ -1,0 +1,284 @@
+/* profile.css: what MOAB found about a guest or a company (profile.js), on the person page (#/people/<key>), in the brief,
+   on the company page, on the People map's side panel and in the in-call panel. Loaded by index.html and panel.html.
+   References (Mobbin, web): Attio record page (header, main column, a Details side panel)
+     https://mobbin.com/screens/f6750bef-6bce-435c-8460-3c55f32f1254
+   LinkedIn profile (role at company under the name; Experience with a company tile per role)
+     https://mobbin.com/screens/f8153155-60d7-4545-a4b5-0f2d14dfc34b
+   Microsoft Copilot References (numbered sources, the site under each title)
+     https://mobbin.com/screens/e631b279-cfc4-4c1c-85c9-f06c838b8df2
+   What came from them: one heading per section, the same small dot bullet everywhere, a numbered chip after each fact,
+   a timeline with a company tile per job, facts as a grid of small cards. Motion only on hover. */
+
+/* ---------- the person page ---------- */
+.pf-page { min-width: 0; }
+.pf-head { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; align-items: center; gap: 12px 20px; padding: 24px 32px 20px; border-bottom: 1px solid var(--line); }
+.pf-head-text { min-width: 0; }
+.pf-title-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.pf-title-row h1 { font-size: 24px; font-weight: 600; line-height: 1.3; letter-spacing: -0.01em; color: var(--ink); }
+.pf-role { margin-top: 2px; font-size: 15px; line-height: 1.5; color: var(--ink-2); }
+.pf-role a { color: var(--ink); font-weight: 500; text-decoration: none; }
+.pf-role a:hover { text-decoration: underline; }
+.pf-at { color: var(--muted); }
+.pf-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin-top: 6px; font-size: 13px; line-height: 1.5; color: var(--muted); }
+.pf-sep { color: var(--faint); }
+.pf-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.pf-actions .btn { text-decoration: none; }
+.pf-body { display: grid; grid-template-columns: minmax(0, 1fr) 340px; }
+.pf-main { min-width: 0; max-width: 860px; padding: 4px 32px 64px; }
+.pf-side { min-width: 0; padding: 20px 24px 48px; border-left: 1px solid var(--line); }
+.pf-side-sec + .pf-side-sec { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--line); }
+.pf-side .pf-h { margin-bottom: 8px; font-size: 13px; }
+.pf-side-sub { margin: 12px 0 4px; font-size: 12px; font-weight: 600; line-height: 1.5; color: var(--muted); }
+.pf-foot { padding: 0 32px 32px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+/* ---------- sections, bullets and source chips (everywhere) ---------- */
+.pf-sec { margin-top: 28px; min-width: 0; }
+.pf-h { margin: 0 0 10px; font-size: 15px; font-weight: 600; line-height: 1.4; color: var(--ink); }
+.pf-lead.pf-lead { margin: 0; font-size: 15px; line-height: 1.6; color: var(--ink); overflow-wrap: anywhere; }
+.pf-list { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin: 0; padding: 0; }
+.pf-list > li { position: relative; display: flex; align-items: baseline; gap: 10px; min-width: 0; padding-left: 16px; font-size: 14px; line-height: 1.55; color: var(--ink); }
+.pf-list > li::before { content: ""; position: absolute; left: 3px; top: 0.62em; width: 5px; height: 5px; border-radius: 50%; background: var(--accent-line); }
+.pf-list-sm > li { font-size: 13px; color: var(--ink-2); }
+.pf-txt { min-width: 0; overflow-wrap: anywhere; }
+.pf-txt strong { font-weight: 600; color: var(--ink); }
+.pf-date { flex: none; min-width: 64px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pf-when { color: var(--muted); }
+.pf-cites { display: inline-flex; flex-wrap: wrap; gap: 3px; margin-left: 6px; vertical-align: 1px; }
+.pf-cite {
+  display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 5px;
+  background: var(--accent-bg); color: var(--accent); font-size: 11px; font-weight: 600; line-height: 1.5; text-decoration: none; font-variant-numeric: tabular-nums;
+  transition: background-color var(--t-fast) ease, color var(--t-fast) ease;
+}
+.pf-cite:hover { background: var(--accent-fill); color: var(--on-accent); }
+.pf-cite:focus-visible { outline-offset: 1px; border-radius: 5px; }
+.pf-state { display: flex; align-items: flex-start; gap: 10px; margin-top: 20px; padding: 12px 14px; border-radius: var(--r-lg); background: var(--surface-2); font-size: 14px; line-height: 1.55; color: var(--ink-2); }
+.pf-state .ic { margin-top: 3px; color: var(--muted); }
+.pf-state strong { color: var(--ink); font-weight: 600; }
+
+/* Past work: a company tile per job on a thin line, newest first. */
+.pf-tl { display: flex; flex-direction: column; margin: 0; padding: 0; }
+.pf-tl-item { position: relative; display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 14px; padding-bottom: 18px; }
+.pf-tl-item:last-child { padding-bottom: 0; }
+.pf-tl-item:not(:last-child)::before { content: ""; position: absolute; left: 15.5px; top: 38px; bottom: 4px; width: 1px; background: var(--line-2); }
+.pf-tl-tile { display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; font-size: 13px; font-weight: 600; line-height: 1.3; }
+.pf-tl-body { min-width: 0; padding-top: 1px; }
+.pf-tl-role.pf-tl-role { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.5; color: var(--ink); overflow-wrap: anywhere; }
+.pf-tl-meta.pf-tl-meta { margin: 0 0 6px; font-size: 13px; line-height: 1.5; color: var(--muted); }
+.pf-tl-body .pf-list { margin-top: 6px; }
+
+/* Key facts: small cards in a grid. */
+.pf-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(172px, 1fr)); gap: 8px; margin: 0; }
+.pf-fact { min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); }
+.pf-fact dt { font-size: 12px; line-height: 1.5; color: var(--muted); }
+.pf-fact dd { margin: 2px 0 0; font-size: 14px; font-weight: 500; line-height: 1.45; color: var(--ink); overflow-wrap: anywhere; }
+
+/* Sources: numbered, the site under each title. */
+.pf-srcs { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; }
+.pf-srcs > li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; align-items: start; }
+.pf-n { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; background: var(--chip); color: var(--ink-2); font-size: 12px; font-weight: 600; line-height: 1.5; font-variant-numeric: tabular-nums; }
+.pf-src-t { display: flex; flex-direction: column; min-width: 0; font-size: 14px; line-height: 1.45; }
+.pf-src-t a { color: var(--ink); font-weight: 500; text-decoration: none; overflow-wrap: anywhere; }
+.pf-src-t a:hover { color: var(--accent); text-decoration: underline; }
+.pf-src-t .ext { width: 12px; height: 12px; margin-left: 4px; vertical-align: -1px; color: var(--muted); }
+.pf-host { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+
+/* "With you" and "At a glance" */
+.pf-calls { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; }
+.pf-call { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 10px; align-items: center; margin: 0 -8px; padding: 6px 8px; border-radius: var(--r-md); color: var(--ink); text-decoration: none; transition: background-color var(--t-fast) ease; }
+.pf-call:hover { background: var(--hover); }
+.pf-date-tile, .pm-date { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; flex: none; width: 36px; height: 40px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--surface); }
+.pf-date-tile .m, .pm-date .m { font-size: 10px; font-weight: 600; line-height: 1.4; letter-spacing: 0.04em; text-transform: uppercase; color: var(--tag-red-ink); }
+.pf-date-tile .d, .pm-date .d { font-size: 15px; font-weight: 600; line-height: 1.3; color: var(--ink); }
+.pf-call-text { display: flex; flex-direction: column; min-width: 0; }
+.pf-call-t { font-size: 13px; font-weight: 500; line-height: 1.45; overflow-wrap: anywhere; }
+.pf-call-s { font-size: 12px; color: var(--muted); line-height: 1.45; }
+.pf-faces { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; }
+.pf-faces > li { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pf-face-t { display: flex; flex-direction: column; min-width: 0; }
+.pf-face-name { font-size: 13px; font-weight: 500; line-height: 1.45; color: var(--ink); text-align: left; }
+a.pf-face-name, .link-btn.pf-face-name { color: var(--ink); text-decoration: none; }
+a.pf-face-name:hover, .link-btn.pf-face-name:hover { color: var(--accent); text-decoration: underline; }
+.pf-face-s { font-size: 12px; color: var(--muted); line-height: 1.45; overflow-wrap: anywhere; }
+.pf-ties { margin-top: 12px; }
+.pf-props { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 6px 12px; margin: 0; font-size: 13px; line-height: 1.5; }
+.pf-props dt { color: var(--muted); }
+.pf-props dd { margin: 0; min-width: 0; color: var(--ink); overflow-wrap: anywhere; }
+.pf-props a { color: var(--accent); font-weight: 500; }
+
+/* ---------- in the brief: a person's compact profile, "Bring up on the call", the company block ---------- */
+.pf-mini { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); }
+.pf-mini .pf-lead { font-size: 14px; line-height: 1.55; }
+.pf-mini .pf-mini-h, .pm-card .pf-mini-h, .pm-row-card .pf-mini-h { margin: 4px 0 0; font-size: 12px; font-weight: 600; line-height: 1.5; color: var(--muted); }
+.pf-mini .pf-mini-open { margin: 2px 0 0; }
+.pf-open { display: inline-flex; align-items: center; gap: 2px; font-size: 13px; font-weight: 500; text-decoration: none; }
+.pf-open .ic { width: 14px; height: 14px; transition: transform var(--t-fast) var(--ease); }
+.pf-open:hover .ic { transform: translateX(2px); }
+.p-name .pf-name-link { color: var(--ink); text-decoration: none; }
+.p-name .pf-name-link:hover strong { color: var(--accent); text-decoration: underline; }
+.pf-forcall > li::before { background: var(--accent); }
+.pf-who { display: inline-flex; align-items: center; gap: 6px; margin-right: 4px; font-weight: 600; color: var(--ink); text-decoration: none; vertical-align: top; }
+.pf-who .avatar { flex: none; }
+a.pf-who:hover, .link-btn.pf-who:hover { color: var(--accent); }
+.pf-sub-h.pf-sub-h { margin: 16px 0 8px; font-size: 13px; font-weight: 600; line-height: 1.5; color: var(--ink); }
+.pf-org { min-width: 0; }
+.pf-org-head { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; align-items: center; }
+.pf-org-tile { display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; font-size: 13px; font-weight: 600; line-height: 1.3; }
+.pf-org-head-t { min-width: 0; }
+.pf-org-name { margin: 0; font-size: 18px; font-weight: 600; line-height: 1.35; color: var(--ink); overflow-wrap: anywhere; }
+.pf-org .pf-meta { margin-top: 2px; }
+.pf-org .pf-sec { margin-top: 20px; }
+.pf-org .pf-h { font-size: 14px; margin-bottom: 8px; }
+.co-sec.pf-org-sec { padding-bottom: 4px; }
+.pf-note-src { font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+/* ---------- the person's connection map ---------- */
+.pm { container: pm / inline-size; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.pm-canvas {
+  position: relative; min-width: 0; padding: 16px 18px 18px; border: 1px solid var(--line); border-radius: var(--r-xl);
+  background-color: #f5f5f3; background-image: radial-gradient(circle, #d3d3cf 1px, transparent 1.3px); background-size: 18px 18px;
+}
+.pm-lines { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.pm-line { fill: none; stroke: #c9c9c5; stroke-width: 1.5; stroke-linecap: round; transition: opacity 160ms ease, stroke 160ms ease; }
+.pm-line.past { stroke-dasharray: 4 5; }
+.pm-line.mentioned { stroke: #bdb7f4; }
+.pm-line.lit { stroke: var(--accent); stroke-width: 2; }
+.pm-line.dim, .pm-dot.dim { opacity: 0.28; }
+.pm-dot { fill: var(--ink); stroke: var(--surface); stroke-width: 1.5; transition: opacity 160ms ease; }
+.pm-cols { position: relative; display: grid; grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); gap: 16px 36px; }
+.pm-col { display: flex; flex-direction: column; min-width: 0; }
+.pm-col-h { margin: 0 0 8px; font-size: 12px; font-weight: 600; line-height: 1.5; color: var(--muted); }
+.pm-col-nodes { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 10px; min-width: 0; }
+.pm-node {
+  position: relative; display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid rgba(23, 24, 26, 0.06);
+  border-radius: 12px; background: var(--surface); color: var(--ink); text-align: left; cursor: pointer;
+  box-shadow: 0 1px 2px rgba(23, 24, 26, 0.06), 0 4px 14px rgba(23, 24, 26, 0.06); transition: box-shadow 160ms ease, transform 200ms var(--ease);
+}
+.pm-node:hover { transform: translateY(-1px); box-shadow: 0 2px 4px rgba(23, 24, 26, 0.06), 0 10px 24px rgba(23, 24, 26, 0.10); }
+.pm-node[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent), 0 2px 4px rgba(23, 24, 26, 0.06), 0 10px 24px rgba(23, 24, 26, 0.10); }
+.pm-node:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pm-self { border-color: var(--accent-line); }
+.pm-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.pm-name, .pm-sub { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pm-name { font-size: 13px; font-weight: 600; line-height: 1.4; }
+.pm-sub { font-size: 12px; color: var(--muted); line-height: 1.4; }
+.pm-tile { display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; font-size: 13px; font-weight: 600; line-height: 1.3; flex: none; }
+.pm-node .pm-date { width: 32px; height: 36px; }
+.pm-node .avatar { box-shadow: 0 0 0 2px var(--surface), 0 1px 4px rgba(23, 24, 26, 0.16); }
+.pm-card { min-width: 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); font-size: 14px; line-height: 1.55; color: var(--ink-2); }
+.pm-card > * + * { margin-top: 8px; }
+.pm-card.on { box-shadow: var(--shadow-card); }
+.pm-hint { display: flex; align-items: flex-start; gap: 8px; margin: 0; font-size: 13px; line-height: 1.5; color: var(--muted); }
+.pm-hint .ic { margin-top: 2px; flex: none; }
+.pm-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.pm-card-name.pm-card-name { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.4; color: var(--ink); overflow-wrap: anywhere; }
+.pm-card-sub.pm-card-sub { font-size: 13px; line-height: 1.5; color: var(--muted); }
+.pm-card .pf-lead { font-size: 14px; line-height: 1.55; }
+.pm-card .pf-facts { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.pm-card-acts { display: flex; flex-wrap: wrap; gap: 8px; }
+.pm-card-acts .btn { text-decoration: none; }
+.pm-card-acts .btn .ic, .pm-act .ic { width: 14px; height: 14px; }
+.pm-act { display: inline-flex; align-items: center; gap: 2px; font-size: 13px; font-weight: 500; }
+.pm-card .xp-card { font-size: 13px; }
+/* Narrow box (phones): the columns become labelled groups, one card per line. Lines would run behind the stacked cards
+   and read as a chain, so they are left out here; each group's heading says how the cards connect. */
+@container pm (max-width: 640px) {
+  .pm-cols { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .pm-col-nodes { gap: 8px; }
+  .pm-lines { display: none; }
+}
+
+/* The panel's version of the map: a grouped list, each row opens its card under it. */
+.pm-list { display: flex; flex-direction: column; min-width: 0; }
+.pm-list .pm-col-h { margin: 8px 0 2px; }
+.pm-list .pm-col-h:first-child { margin-top: 0; }
+.pm-list ul { margin: 0; padding: 0; }
+.pm-row {
+  display: flex; align-items: center; gap: 10px; width: calc(100% + 12px); min-width: 0; margin: 0 -6px; padding: 6px; border: 0; border-radius: var(--r-md);
+  background: none; color: var(--ink); text-align: left; cursor: pointer; transition: background-color var(--t-fast) ease;
+}
+.pm-row:hover { background: var(--hover); }
+.pm-row:focus-visible { outline-offset: -2px; }
+.pm-row .pf-chev { width: 14px; height: 14px; color: var(--muted); flex: none; transition: transform 150ms ease; }
+.pm-row[aria-expanded="true"] .pf-chev { transform: rotate(180deg); }
+.pm-row-card { margin: 4px 0 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); font-size: 13px; line-height: 1.5; color: var(--ink-2); }
+.pm-row-card > * + * { margin-top: 6px; }
+
+/* ---------- the in-call panel's profile view (about 360px wide) ---------- */
+.pp { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.pp-back {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; height: 28px; margin-left: -6px; padding: 0 10px 0 4px; border: 0;
+  border-radius: var(--r-md); background: none; color: var(--ink-2); font-size: 13px; font-weight: 500; line-height: 1.45; cursor: pointer;
+}
+.pp-back:hover { background: var(--hover); color: var(--ink); }
+.pp-back .ic { width: 16px; height: 16px; }
+.pp-head { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 10px; align-items: center; }
+.pp-head-t { min-width: 0; }
+.pp-name { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.pp-sub { font-size: 12px; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
+.pp-pills { margin-top: 4px; }
+.pp .pf-meta { margin-top: 0; font-size: 12px; }
+.pp .pf-state { margin-top: 0; font-size: 13px; }
+.pp .pf-lead { font-size: 14px; }
+.pp .pf-list > li { font-size: 13px; }
+.pp .pf-date { min-width: 52px; font-size: 12px; }
+.pp .pf-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pp .pf-fact { padding: 8px 10px; }
+.pp .pf-fact dd { font-size: 13px; }
+.pp .pf-org-name { font-size: 16px; }
+.pp-open { margin-top: 4px; font-size: 13px; }
+.pp-open a { display: inline-flex; align-items: center; gap: 4px; font-weight: 500; }
+.pp-open .ext { width: 12px; height: 12px; }
+.pf-fold { min-width: 0; border-top: 1px solid var(--line); }
+.pf-fold > summary {
+  display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 2px; cursor: pointer; list-style: none;
+  font-size: 13px; font-weight: 600; line-height: 1.45; color: var(--ink); border-radius: var(--r-sm);
+}
+.pf-fold > summary::-webkit-details-marker { display: none; }
+.pf-fold > summary:hover { color: var(--accent); }
+.pf-fold > summary:focus-visible { outline-offset: -2px; }
+.pf-fold-t { flex: 1; min-width: 0; }
+.pf-count { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--r-full); background: var(--chip); color: var(--ink-2); font-size: 11px; font-weight: 600; line-height: 1.45; }
+.pf-chev { width: 14px; height: 14px; color: var(--muted); flex: none; transition: transform 150ms ease; }
+.pf-fold[open] > summary .pf-chev { transform: rotate(180deg); }
+.pf-fold-body { padding: 0 0 14px; min-width: 0; }
+.p-props .link-btn.pp-org-link { font-weight: 500; text-align: left; }
+.pp-key { font-size: 13px; line-height: 1.5; color: var(--ink-2); }
+.pp-key strong { color: var(--ink); font-weight: 600; }
+.pp .rs { margin-top: 0; gap: 2px; font-size: 12px; }
+.pp > .muted-line { font-size: 12px; }
+.pp-row-chev { width: 14px; height: 14px; color: var(--muted); flex: none; transition: transform var(--t-fast) var(--ease); }
+.p-person-btn:hover .pp-row-chev { transform: translateX(2px); }
+/* Brief: the guests under "On the call" open their profiles. */
+a.who-chip { color: inherit; text-decoration: none; }
+a.who-chip:hover { color: var(--accent); }
+
+/* ---------- People map side panel: the profile under a selected card ---------- */
+.map-side .pf-mini { margin-top: 12px; }
+.map-side .pf-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.map-side .pf-org-name { font-size: 15px; }
+
+/* ---------- small screens ---------- */
+@media (max-width: 1100px) {
+  .pf-body { grid-template-columns: minmax(0, 1fr); }
+  .pf-side { border-left: 0; border-top: 1px solid var(--line); padding: 20px 32px 48px; }
+}
+@media (max-width: 640px) {
+  .pf-head { grid-template-columns: 48px minmax(0, 1fr); padding: 16px; gap: 10px 14px; }
+  .pf-head .avatar.xl { width: 48px; height: 48px; font-size: 17px; }
+  .pf-title-row h1 { font-size: 20px; }
+  .pf-actions { grid-column: 1 / -1; justify-content: flex-start; }
+  .pf-main { padding: 4px 16px 40px; }
+  .pf-side { padding: 16px 16px 40px; }
+  .pf-foot { padding: 0 16px 24px; }
+  .pf-date { min-width: 52px; }
+}
+
+/* ---------- dark theme ---------- */
+:root[data-theme="dark"] .pm-canvas { background-color: #1b1c1f; background-image: radial-gradient(circle, #3a3b40 1px, transparent 1.3px); }
+:root[data-theme="dark"] .pm-line { stroke: #4a4b50; }
+:root[data-theme="dark"] .pm-line.lit { stroke: var(--accent); }
+
+@media (prefers-reduced-motion: reduce) {
+  .pm-node, .pm-line, .pm-dot, .pf-cite, .pf-call, .pm-row, .pm-row .pf-chev, .pf-chev, .pf-open .ic { transition: none; }
+  .pm-node:hover, .pf-open:hover .ic { transform: none; }
+}

@@ -13,6 +13,9 @@
     : { today: etToday(), invites: [], people: {}, companies: {}, papers: {}, currentSecurityPack: "", relationships: [], watch: [], me: null };
   ["people", "companies", "papers"].forEach((k) => { if (!D[k]) D[k] = {}; });
   ["invites", "relationships", "watch", "mentioned"].forEach((k) => { if (!D[k]) D[k] = []; });
+  // A company row may arrive carrying only what MOAB found on the web (its profile): give it the fields every page reads.
+  Object.values(D.companies).forEach((c) => { if (c && typeof c === "object") { if (typeof c.status !== "string" || !c.status) c.status = "Prospect"; if (!Array.isArray(c.history)) c.history = []; } });
+  if (!D.orgs || typeof D.orgs !== "object") D.orgs = {}; // GET /api/research's orgs[domain] = { status, note, profile }
   // Honest source tags: made-up data says so in demo mode; real data names where it came from.
   const SRC = MODE === "demo" ? { calendar: "Sample data", records: "Sample data", recordsList: "Sample records" }
     : { calendar: "Your calendar", records: "MOAB records", recordsList: "MOAB records" };
@@ -388,7 +391,7 @@
       const prev = D.companies[p.previous];
       if (ad) { lead = { text: "Came from " + ad.org + ", which uses Backstage.", tail: "They may already know it.", src: "pub" }; quote = ad.use; }
       else if (prev && prev.customer) lead = { text: "Came from " + p.previous + ", a Spotify customer.", tail: "Ask how they used it there.", src: "sample" };
-      else if (prev && /open deal/i.test(prev.status || "")) lead = { text: "Came from " + p.previous + ", where you have an open deal.", tail: "Check who you still know there.", src: "sample" };
+      else if (prev && /open deal/i.test(prev.status || "")) lead = { text: "Came from " + p.previous + ", where you have an open deal.", tail: "They may still know your contacts there.", src: "sample" };
     }
     const isNew = !!(p.startedAt && monthsSince(p.startedAt) < 6);
     return { lead, quote, isNew, unknown: !p.known };
@@ -457,7 +460,7 @@
       (D.mentioned || []).filter((m) => m.type === "person" && inviteById(m.callId)).slice(0, 6).forEach((m) => {
         const inv = inviteById(m.callId);
         items.push({ id: "m-" + m.id, icon: "users", kind: "Mentioned", title: "Mentioned on the " + inv.company + " call: " + m.label, date: shortDate(D.today),
-          text: m.label + (m.sub ? ", " + String(m.sub).replace(/^Mentioned · /, "") : "") + ", came up on the call. Check who they are before you talk again.",
+          text: m.label + (m.sub ? ", " + String(m.sub).replace(/^Mentioned · /, "") : "") + ", came up on the call. MOAB added them to the People map.",
           src: SRC.records, callId: inv.id, person: m.label });
       });
     }
@@ -539,7 +542,7 @@
         return Object.assign({ name: a.name, email: a.email, title: "Title unknown", startedAt: null, previous: "", known: false, note: "" }, rec, { title: rec.title || "Title unknown" });
       });
       ctx.people.forEach((p) => { p.facts = personFacts(p); });
-      const flagged = ctx.people.filter((p) => p.facts.lead || p.facts.isNew).length;
+      const flagged = ctx.people.filter((p) => p.facts.lead || p.facts.isNew || personInfo(p.email).profile).length;
       return esc(flagged + " of " + ctx.people.length + " have something worth knowing.");
     });
     await step("adopters", () => {
@@ -604,9 +607,9 @@
     return (fact ? fact + " " : "") + ask;
   }
 
+  // Real to-dos only (papers to send, rivals to be ready for). Who the guests are is MOAB's job: its research saves itself.
   function todoList(ctx) {
     const out = ctx.papers.filter((p) => p.todo).map((p) => ({ text: p.todo }));
-    ctx.people.filter((p) => !p.known).forEach((p) => out.push({ text: p.title === "Title unknown" ? "Add " + p.name + "'s title to MOAB's records." : "Add " + p.name + " (" + p.title + ") to the records." }));
     ctx.rivals.filter((r) => r.todo).forEach((r) => out.push({ text: r.todo, link: { href: "#rivals", label: "Rival notes" }, src: "Public price" }));
     return out;
   }
@@ -615,9 +618,14 @@
     const b = ctx.bill;
     return {
       call: { title: ctx.invite.title, when: ctx.invite.when, company: ctx.invite.company, notes: ctx.invite.notes },
-      people: ctx.people.map((p) => ({ name: p.name, title: p.title, tenure: tenure(p.startedAt), previous: p.previous, note: p.note,
-        keyFact: p.facts.lead ? p.facts.lead.text + " [" + p.facts.lead.src + "]" : null, newInJob: p.facts.isNew, inSpotifyRecords: !p.facts.unknown })),
-      company: ctx.company ? Object.assign({ source: TAG.records }, ctx.company) : null,
+      people: ctx.people.map((p) => {
+        const pr = personInfo(p.email).profile;
+        return Object.assign({ name: p.name, title: p.title, tenure: tenure(p.startedAt), previous: p.previous, note: p.note,
+          keyFact: p.facts.lead ? p.facts.lead.text + " [" + p.facts.lead.src + "]" : null, newInJob: p.facts.isNew, inSpotifyRecords: !p.facts.unknown },
+          pr ? { profile: profileFacts(pr) } : {});
+      }),
+      company: ctx.company ? Object.assign({ source: TAG.records }, ctx.company, { profile: undefined }) : null,
+      companyProfile: orgFacts(orgInfo(ctx.invite.company).profile),
       sinceLastCall: alertsFor(ctx.invite.id).map((w) => w.text + " [" + TAG.calendar + "]"),
       backstage: b ? {
         source: "public", version: b.from, latest: b.to, releasesBehind: b.behind, seriousNotices: b.serious,
@@ -692,15 +700,17 @@
     const local = r.local || {};
     let h = "";
     // No name on the invite: say so, and say when the name MOAB used came from their work email.
-    if (r.nameFrom === "email" && r.nameUsed) h += '<p class="rs-note">No name on the invite. Using the name from their email: <strong>' + esc(r.nameUsed) + "</strong>.</p>";
+    if ((r.nameFrom === "email" || r.nameFrom === "event") && r.nameUsed) h += '<p class="rs-note">No name on the invite. Using the name from ' + (r.nameFrom === "event" ? "the event description" : "their email") + ": <strong>" + esc(r.nameUsed) + "</strong>.</p>";
     if (r.status === "notfound") h += '<p class="rs-line"><span class="pill tag-gray">Can\'t find this person</span></p>';
-    if (r.status === "pending") h += '<p class="rs-line rs-wait">' + ic("loader", "spin") + "<span>Looking up…</span></p>";
+    if (r.status === "pending") h += '<p class="rs-line rs-wait">' + ic("search") + "<span>Researching…</span></p>";
     else if (r.status === "done") {
       const facts = [RELATION[r.relationship], r.team, r.seniority ? r.seniority.charAt(0).toUpperCase() + r.seniority.slice(1) : "", r.tenure ? r.tenure + " there" : ""].filter(Boolean);
       const auto = r.found === "auto";
       h += '<p class="rs-line">' + (auto ? '<span class="pill tag-teal">Found automatically</span>' : "") + (MODE === "demo" ? '<span class="src sample">Sample</span>' : "")
         + "<span>" + esc(facts.length ? facts.join(" · ") : "Relationship unknown") + "</span></p>";
-      const links = (r.sources || []).map((s) => ({ href: safeHref(s.url), label: s.label })).filter((s) => s.href);
+      // With a profile, its numbered sources sit under each fact instead.
+      const prof = cleanProfile(r.profile, false);
+      const links = prof && !prof.empty ? [] : (r.sources || []).map((s) => ({ href: safeHref(s.url), label: s.label })).filter((s) => s.href);
       if (links.length) h += '<p class="rs-src">' + (links.length > 1 ? "Sources: " : "Source: ") + links.map((s) => '<a href="' + esc(s.href) + '" target="_blank" rel="noopener noreferrer">' + esc(s.label || new URL(s.href).hostname) + ic("link", "ext") + NEW_TAB + "</a>").join(" · ") + "</p>";
       if (auto && opts.actions) {
         const edit = opts.edit ? '<button type="button" class="btn ghost sm" data-edit-person="' + esc(p.email) + '" aria-label="' + esc("Edit " + p.name + "'s title and note") + '">' + ic("pencil") + "Edit</button>"
@@ -733,29 +743,127 @@
     if (!r.ok) throw new Error(j.error === "no-key" ? "Add a Claude key to look people up." : j.error || "Couldn't start the lookup (" + r.status + ")");
     if (D.people[email] && D.people[email].research) D.people[email].research = Object.assign({}, D.people[email].research, { status: "pending", note: "" });
   }
-  // Every 5 s, and only while a guest on screen is "Looking up…", ask the server what it found. onChange(emails) repaints.
-  function watchResearch(visibleEmails, onChange) {
+  // Once soon after the page opens (for the company profiles, which live.js may not carry yet), then every 5 s while a guest
+  // or a company on screen is still "Researching…", ask the server what it found. onChange(emails, domains) repaints.
+  // visibleOrgs (optional) gives the company names on screen.
+  function watchResearch(visibleEmails, onChange, visibleOrgs) {
     if (MODE !== "live") return;
-    const pending = () => visibleEmails().some((e) => D.people[e] && D.people[e].research && D.people[e].research.status === "pending");
+    let first = true;
+    const pending = () => visibleEmails().some((e) => D.people[e] && D.people[e].research && D.people[e].research.status === "pending")
+      || (visibleOrgs ? visibleOrgs() : []).some((n) => orgInfo(n).status === "pending");
     const tick = async () => {
-      if (document.visibilityState === "visible" && pending()) {
+      if (document.visibilityState === "visible" && (first || pending())) {
         try {
           const r = await fetchTimeout("/api/research", 8000);
           const j = r.ok ? await r.json() : {};
-          const changed = [];
+          const changed = [], domains = [];
           Object.entries(j.people || {}).forEach(([email, res]) => {
             const p = D.people[email];
-            if (!p || JSON.stringify(p.research) === JSON.stringify(res)) return;
+            if (!p || !res || JSON.stringify(p.research) === JSON.stringify(res)) return;
             p.research = res;
             if (res.title) p.title = res.title;
             changed.push(email);
           });
-          if (changed.length) onChange(changed);
+          Object.entries(j.orgs && typeof j.orgs === "object" ? j.orgs : {}).forEach(([dom, o]) => {
+            if (!o || typeof o !== "object" || JSON.stringify(D.orgs[dom]) === JSON.stringify(o)) return;
+            D.orgs[dom] = o;
+            domains.push(dom);
+          });
+          if (r.ok) first = false;
+          if (changed.length || domains.length) onChange(changed, domains);
         } catch (e) { /* try again on the next tick */ }
       }
       setTimeout(tick, 5000);
     };
-    setTimeout(tick, 5000);
+    setTimeout(tick, 1500);
+  }
+
+  // ---------- profiles: what MOAB's research found about a guest and their company ----------
+  // A guest: D.people[email].research.profile (server.py's records.people[email].profile). A company: GET /api/research's
+  // orgs[domain].profile, or D.companies[name].profile from live.js (server.py's records.orgs[domain].profile).
+  // Cleaned again here, whatever the server sent: only http(s) sources count, and a bullet left with no source is dropped,
+  // so every line on screen cites a page MOAB really read. Sources are renumbered 1, 2, 3… in their own order.
+  const pstr = (v, n) => String(v == null ? "" : v).replace(/\s+/g, " ").trim().slice(0, n || 600);
+  const PCACHE = new WeakMap();
+  function cleanProfile(raw, org) {
+    if (!raw || typeof raw !== "object") return null;
+    if (PCACHE.has(raw)) return PCACHE.get(raw);
+    const valid = [], vmap = {};
+    (Array.isArray(raw.sources) ? raw.sources : []).forEach((s, i) => {
+      const href = safeHref(s && s.url);
+      if (!href) return;
+      const host = new URL(href).hostname.replace(/^www\./, "");
+      vmap[i] = valid.length;
+      valid.push({ href, label: pstr(s.label, 140) || host, host });
+    });
+    const src = (list) => Array.from(new Set((Array.isArray(list) ? list : []).filter((i) => Number.isInteger(i) && vmap[i] !== undefined).map((i) => vmap[i])));
+    const objs = (list) => (Array.isArray(list) ? list : []).filter((b) => b && typeof b === "object");
+    const items = (list, max, extra) => objs(list).map((b) => Object.assign({ text: pstr(b.text), src: src(b.src) }, extra ? extra(b) : {}))
+      .filter((b) => b.text && b.src.length).slice(0, max);
+    const sum = raw.summary && typeof raw.summary === "object" ? { text: pstr(raw.summary.text), src: src(raw.summary.src) } : null;
+    const p = { name: pstr(raw.name, 140), summary: sum && sum.text && sum.src.length ? sum : null, forCall: items(raw.forCall, 4),
+      at: pstr(raw.at, 40), confidence: raw.confidence === "high" || raw.confidence === "medium" ? raw.confidence : "" };
+    if (org) {
+      Object.assign(p, { domain: pstr(raw.domain, 120), what: items(raw.what, 6), news: items(raw.news, 5, (b) => ({ when: pstr(b.when, 40) })), tech: items(raw.tech, 6),
+        facts: objs(raw.facts).map((f) => ({ label: pstr(f.label, 60), value: pstr(f.value, 300), src: src(f.src) })).filter((f) => f.label && f.value && f.src.length).slice(0, 8) });
+    } else {
+      Object.assign(p, { now: items(raw.now, 6), education: items(raw.education, 3), work: items(raw.work, 6),
+        past: objs(raw.past).map((r) => ({ role: pstr(r.role, 140), org: pstr(r.org, 140), when: pstr(r.when, 40), src: src(r.src), points: items(r.points, 4) }))
+          .filter((r) => (r.role || r.org) && (r.src.length || r.points.length)).slice(0, 8) });
+    }
+    const all = (org ? [p.facts, p.what, p.news, p.tech, p.forCall] : [p.now, p.education, p.work, p.forCall, p.past].concat(p.past.map((r) => r.points)))
+      .flat().concat(p.summary ? [p.summary] : []);
+    const used = Array.from(new Set(all.flatMap((b) => b.src))).sort((a, b) => a - b), renum = {};
+    used.forEach((v, i) => { renum[v] = i; });
+    all.forEach((b) => { b.src = b.src.map((v) => renum[v]).sort((a, b) => a - b); });
+    p.sources = used.map((v) => valid[v]);
+    p.empty = !all.length;
+    PCACHE.set(raw, p);
+    return p;
+  }
+  // One guest: their records row, their research (status, note) and their cleaned profile (null when there is nothing sourced).
+  function personInfo(email) {
+    const rec = D.people[email] || {}, r = rec.research && typeof rec.research === "object" ? rec.research : null;
+    const prof = r ? cleanProfile(r.profile, false) : null;
+    return { email, rec, research: r, status: r ? String(r.status || "") : "", note: r ? pstr(r.note, 300) : "", profile: prof && !prof.empty ? prof : null };
+  }
+  // A company by the name the calls use ("Tks"): its email domain, research status and cleaned profile.
+  function orgDomain(name) {
+    const c = D.companies[name] || {};
+    if (c.domain) return String(c.domain);
+    if (D.companyDomains && D.companyDomains[name]) return String(D.companyDomains[name]);
+    const inv = D.invites.find((i) => i.company === name && i.domain);
+    return inv ? String(inv.domain) : "";
+  }
+  function orgInfo(name) {
+    const domain = orgDomain(name), o = (domain && D.orgs[domain]) || null, c = D.companies[name] || {};
+    const prof = cleanProfile((o && o.profile) || c.profile, true), has = !!(prof && !prof.empty);
+    const status = o && o.status === "pending" ? "pending" : has ? "done" : o ? String(o.status || "") : "";
+    return { name, domain, status, note: o ? pstr(o.note, 300) : "", profile: has ? prof : null };
+  }
+  // What Claude gets for the written brief: the profile's text only (the sources stay on the page).
+  const pTexts = (list) => (list || []).map((b) => b.text);
+  const profileFacts = (pr) => (pr ? { source: MODE === "demo" ? "sample" : "MOAB's web research", summary: pr.summary ? pr.summary.text : "", now: pTexts(pr.now),
+    past: pr.past.slice(0, 3).map((r) => ({ role: r.role, org: r.org, when: r.when, points: pTexts(r.points) })), forCall: pTexts(pr.forCall) } : null);
+  const orgFacts = (pr) => (pr ? { source: MODE === "demo" ? "sample" : "MOAB's web research", name: pr.name, summary: pr.summary ? pr.summary.text : "",
+    facts: pr.facts.map((f) => f.label + ": " + f.value), what: pTexts(pr.what), forCall: pTexts(pr.forCall) } : null);
+  // A short opaque id for a person's page (#/people/<key>), so an email address never goes into a URL.
+  function personKey(email) {
+    const s = String(email || "").trim().toLowerCase();
+    let a = 0x811c9dc5, b = 0x9747b28c;
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      a = Math.imul(a ^ c, 0x01000193) >>> 0;
+      b = Math.imul(b ^ c, 0x5bd1e995) >>> 0;
+      b = (b ^ (b >>> 15)) >>> 0;
+    }
+    return (a.toString(36) + b.toString(36)).slice(0, 12);
+  }
+  function emailForKey(key) {
+    const all = new Set(Object.keys(D.people));
+    D.invites.forEach((i) => i.attendees.forEach((a) => all.add(a.email)));
+    for (const e of all) if (personKey(e) === key) return e;
+    return null;
   }
 
   // ---------- after the call ----------
@@ -765,7 +873,7 @@
     const skip = /^(Spotify|Portal|Confidence|Xirp|Backstage|Claude|Code)\b/;
     const names = Array.from(new Set(text.match(/\b[A-Z][a-z]+ [A-Z][a-z]+\b/g) || []))
       .filter((n) => !known.includes(n.toLowerCase()) && !skip.test(n));
-    names.forEach((n) => changes.push({ kind: "People", text: n + " was mentioned. Add them and look them up before the next call." }));
+    names.forEach((n) => changes.push({ kind: "People", text: n + " was mentioned on the call." }));
     if (/pilot|trial/i.test(text)) changes.push({ kind: "Next step", text: "A pilot came up. Agree the pass or fail rules and who signs off before it starts." });
     const papers = D.papers[ctx.invite.company] || {};
     if (/security/i.test(text)) {
@@ -866,8 +974,10 @@
   function explainHtml(x, opts) {
     if (!x) return "";
     opts = opts || {};
-    const ev = (x.evidence || []).map((s) => Object.assign({}, s, { href: safeHref(s.url) })).filter((s) => s.href);
-    const refs = (list) => (list || []).filter((i) => i >= 0 && i < ev.length).map((i) => '<sup class="xp-ref"><span class="sr-only">source </span>' + (i + 1) + "</sup>").join("");
+    // A sentence cites sources by their place in x.evidence; one with no safe link is left out, so num[] keeps each citation on its own source.
+    const ev = [], num = {};
+    (x.evidence || []).forEach((s, i) => { const href = safeHref(s && s.url); if (href) { ev.push(Object.assign({}, s, { href })); num[i] = ev.length; } });
+    const refs = (list) => (list || []).filter((i) => num[i]).map((i) => '<sup class="xp-ref"><span class="sr-only">source </span>' + num[i] + "</sup>").join("");
     const type = x.kind === "company" ? (x.typeLabel || "Relation unknown") : (x.typeLabel || (x.title ? "Works there" : "Mentioned on the call"));
     let h = '<div class="xp-card">';
     h += '<p class="xp-type"><span class="pill ' + (x.kind === "company" ? "tag-blue" : "tag-gray") + '">' + esc(type) + "</span>"
@@ -920,6 +1030,7 @@
     readVersionFile, packagesFor, upgradeBill, tenure, personFacts, paperStatus, guessProduct,
     inviteById, alertsFor, allAlerts, alertOn, priority, priorityBadge, byPriority, prefs, runChecks, openingLine, todoList, factsFor, askClaude, afterCall, relationshipGraph, mergeConnections,
     researchHtml, confirmResearch, lookUpAgain, watchResearch, RELATION,
+    cleanProfile, personInfo, orgInfo, orgDomain, personKey, emailForKey,
     gongFor, gongHtml, money, safeHref, hubspotPlan, hubspotSave, postJson,
   };
 })();

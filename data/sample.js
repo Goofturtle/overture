@@ -86,6 +86,31 @@ window.SAMPLE = {
         title: "Director, Procurement", team: "Procurement", seniority: "director", tenure: "about 7 years", relationship: "employee",
         sources: [{ url: "https://northwindfreight.example/about/leadership", label: "Northwind Freight leadership page" }],
         local: { company: "Northwind Freight", adopter: false, metBefore: false, lastMet: "" },
+        // The profile MOAB's research builds (server.py's records.people[email].profile, contract v2). Made up, with made-up sources.
+        profile: {
+          v: 2, name: "Elena Cruz", at: "2026-10-19T14:00:00+00:00", confidence: "medium",
+          summary: { text: "Elena Cruz runs procurement at Northwind Freight, where she has worked for about seven years. Her team signs off software purchases and vendor security reviews.", src: [0, 1] },
+          now: [
+            { text: "Director of Procurement: her team handles every software purchase above the approval limit.", src: [0] },
+            { text: "Brought in a vendor security questionnaire that every new software supplier must answer before a contract.", src: [1] },
+          ],
+          past: [
+            { role: "Senior Buyer, IT", org: "Calder Logistics", when: "2014 - 2019", src: [2],
+              points: [{ text: "Bought cloud and software contracts for a 3,000-person logistics company.", src: [2] }] },
+          ],
+          education: [],
+          work: [{ text: "Talk: \"Buying software security will approve\", Example Procurement Summit 2025.", src: [3] }],
+          forCall: [
+            { text: "She asks every new supplier for the security questionnaire first: offer to walk her through Spotify's security pack.", src: [1] },
+            { text: "She spoke about getting software past security review; ask what slowed her last purchase down.", src: [3] },
+          ],
+          sources: [
+            { url: "https://northwindfreight.example/about/leadership", label: "Northwind Freight leadership page" },
+            { url: "https://northwindfreight.example/suppliers/security", label: "Northwind Freight supplier security requirements" },
+            { url: "https://calderlogistics.example/news/2017-it-buying-team", label: "Calder Logistics news: meet the IT buying team" },
+            { url: "https://procurementsummit.example/2025/speakers/elena-cruz", label: "Example Procurement Summit 2025 speaker page" },
+          ],
+        },
       },
     },
     "sam@quillstack.example": {
@@ -93,12 +118,93 @@ window.SAMPLE = {
       title: "CTO and co-founder", startedAt: "2023-01", previous: "Helix Health",
       previousRole: "Engineering Manager", known: true,
       note: "Talked to Spotify in January 2026 (see history).",
+      research: {
+        status: "done", note: "", found: "confirmed", foundAt: "2026-10-19T14:05:00+00:00", confidence: "high",
+        title: "CTO and co-founder", team: "Engineering", seniority: "executive", tenure: "almost 4 years", relationship: "employee",
+        sources: [], local: { company: "Quillstack", adopter: false, metBefore: true, lastMet: "Jan 14, 2026" },
+        profile: {
+          v: 2, name: "Sam Okafor", at: "2026-10-19T14:05:00+00:00", confidence: "high",
+          summary: { text: "Sam Okafor co-founded Quillstack in 2023 and runs its engineering team as CTO. Before that he spent six years at Helix Health, the last three managing its platform team.", src: [0, 1] },
+          now: [
+            { text: "CTO of Quillstack: owns engineering, the platform, developer tooling and security for about 80 engineers.", src: [0] },
+            { text: "Set the rule that every service has a named owning team, kept in CODEOWNERS files.", src: [2] },
+            { text: "Rolled Claude Code and Codex out to every engineer in early 2026.", src: [2, 3] },
+            { text: "Hiring fast: 31 open engineering roles on Quillstack's careers page.", src: [4] },
+          ],
+          past: [
+            { role: "Engineering Manager, Platform", org: "Helix Health", when: "2019 - 2022", src: [1],
+              points: [{ text: "Ran the team that built Helix Health's internal developer portal.", src: [1] },
+                { text: "Moved 120 services onto one shared build pipeline.", src: [5] }] },
+            { role: "Senior Software Engineer", org: "Helix Health", when: "2016 - 2019", src: [1],
+              points: [{ text: "Built the scheduling service behind Helix Health's patient app.", src: [1] }] },
+            { role: "Software Engineer", org: "Fernhill Data", when: "2013 - 2016", src: [6], points: [] },
+          ],
+          education: [{ text: "BSc, Computer Science (as listed on his speaker page).", src: [1] }],
+          work: [
+            { text: "Talk: \"Who owns this service? Ownership for AI agents\", Example Conf 2026.", src: [3] },
+            { text: "Post: \"How we gave our coding agents a map of the codebase\", Quillstack engineering blog.", src: [2] },
+            { text: "Maintains codeowners-lint, an open-source checker for CODEOWNERS files.", src: [7] },
+          ],
+          forCall: [
+            { text: "His agents read owners from CODEOWNERS files today; ask what they can't find there, like who decided what and why.", src: [2, 3] },
+            { text: "He built a developer portal at Helix Health, so he knows the upkeep; Xirp now, with a path to Portal, avoids that.", src: [1] },
+          ],
+          sources: [
+            { url: "https://quillstack.example/about", label: "Quillstack: about us" },
+            { url: "https://conf.example.com/2026/speakers/sam-okafor", label: "Example Conf 2026 speaker page" },
+            { url: "https://quillstack.example/blog/agents-codebase-map", label: "Quillstack engineering blog: a map of the codebase for our agents" },
+            { url: "https://conf.example.com/2026/talks/ownership-for-ai-agents", label: "Example Conf 2026 talk: Who owns this service?" },
+            { url: "https://quillstack.example/careers", label: "Quillstack careers" },
+            { url: "https://helixhealth.example/engineering/one-pipeline", label: "Helix Health engineering blog: one pipeline for 120 services" },
+            { url: "https://fernhilldata.example/about/team-2015", label: "Fernhill Data team page (2015)" },
+            { url: "https://code.example.com/sokafor/codeowners-lint", label: "codeowners-lint repository" },
+          ],
+        },
+      },
     },
     "dana.li@quillstack.example": {
       photo: "https://images.pexels.com/photos/20051635/pexels-photo-20051635.jpeg?auto=compress&cs=tinysrgb&w=320&h=320&fit=crop", // stock photo (Pexels licence), see CREDITS.md
       title: "Head of Developer Productivity", startedAt: "2026-10", previous: "Lumen Air",
       previousRole: "Platform Lead", known: true,
       note: "Was your strongest supporter there.",
+      research: {
+        status: "done", note: "", found: "confirmed", foundAt: "2026-10-19T14:06:00+00:00", confidence: "high",
+        title: "Head of Developer Productivity", team: "Developer Productivity", seniority: "head", tenure: "joined this month", relationship: "employee",
+        sources: [], local: { company: "Quillstack", adopter: false, metBefore: true, lastMet: "Aug 20, 2026" },
+        profile: {
+          v: 2, name: "Dana Li", at: "2026-10-19T14:06:00+00:00", confidence: "high",
+          summary: { text: "Dana Li joined Quillstack this month to lead developer productivity. She spent seven years at Lumen Air, the last five leading the platform team that ran its developer portal.", src: [0, 1] },
+          now: [
+            { text: "Head of Developer Productivity at Quillstack: build tooling, CI and the internal developer experience.", src: [0] },
+            { text: "Says her first goal is to measure how long a new engineer takes to ship their first change.", src: [0, 2] },
+          ],
+          past: [
+            { role: "Platform Lead", org: "Lumen Air", when: "2021 - 2026", src: [1],
+              points: [{ text: "Led the platform team that ran Lumen Air's internal developer portal.", src: [1] },
+                { text: "Cut new-engineer setup from two weeks to two days.", src: [3] }] },
+            { role: "Senior Engineer, Developer Tools", org: "Lumen Air", when: "2019 - 2021", src: [1],
+              points: [{ text: "Built the service templates every Lumen Air team starts from.", src: [3] }] },
+            { role: "Software Engineer", org: "Tessellate Systems", when: "2015 - 2019", src: [5], points: [] },
+          ],
+          education: [{ text: "MEng, Software Engineering (as listed on her speaker page).", src: [4] }],
+          work: [
+            { text: "Talk: \"Two weeks to two days: onboarding with a developer portal\", Example Conf 2025.", src: [4] },
+            { text: "Post: \"What I look for in a platform team\", on her engineering blog.", src: [2] },
+          ],
+          forCall: [
+            { text: "She ran a developer portal at Lumen Air; ask what she wants to keep and what she never wants to maintain again.", src: [1, 4] },
+            { text: "She is measuring time to first change: show how Portal and Xirp shorten it.", src: [0, 2] },
+          ],
+          sources: [
+            { url: "https://quillstack.example/blog/welcome-dana", label: "Quillstack blog: welcome, Dana" },
+            { url: "https://lumenair.example/engineering/team", label: "Lumen Air engineering team page" },
+            { url: "https://danali.example/posts/platform-teams", label: "Dana Li's engineering blog: What I look for in a platform team" },
+            { url: "https://lumenair.example/engineering/onboarding", label: "Lumen Air engineering blog: two days to a first commit" },
+            { url: "https://conf.example.com/2025/speakers/dana-li", label: "Example Conf 2025 speaker page" },
+            { url: "https://tessellate.example/about/team-2018", label: "Tessellate Systems team page (2018)" },
+          ],
+        },
+      },
     },
     "michael.tran@rookery.example": {
       photo: "https://images.pexels.com/photos/31268612/pexels-photo-31268612.jpeg?auto=compress&cs=tinysrgb&w=320&h=320&fit=crop", // stock photo (Pexels licence), see CREDITS.md
@@ -110,6 +216,12 @@ window.SAMPLE = {
       photo: "https://images.pexels.com/photos/30468665/pexels-photo-30468665.jpeg?auto=compress&cs=tinysrgb&w=320&h=320&fit=crop", // stock photo (Pexels licence), see CREDITS.md
       title: "Product Director, Checkout", startedAt: "2021-04", previous: "", known: false,
       note: "",
+      // What research says when the web has nothing about someone's work (it never asks you to look them up).
+      research: {
+        status: "unknown", note: "MOAB searched 12 sites and found no public work information about them.", found: "", foundAt: "2026-10-19T14:08:00+00:00", confidence: "",
+        title: "", team: "", seniority: "", tenure: "", relationship: "", sources: [],
+        local: { company: "Rookery Retail", adopter: false, metBefore: false, lastMet: "" },
+      },
     },
   },
 
@@ -218,13 +330,88 @@ window.SAMPLE = {
   // Spotify's own history with companies (stands in for HubSpot).
   companies: {
     "Northwind Freight": {
-      engineers: 420, status: "Open deal: Portal",
+      engineers: 420, status: "Open deal: Portal", domain: "northwindfreight.example",
       history: [{ date: "2025-02", text: "Talked about the plugin bundle. Did not sign: no budget." }],
+      // The company profile MOAB's research builds (server.py's records.orgs[domain].profile, contract v2). Made up, with made-up sources.
+      profile: {
+        v: 2, domain: "northwindfreight.example", name: "Northwind Freight", at: "2026-10-19T14:10:00+00:00", confidence: "high",
+        summary: { text: "Northwind Freight moves freight by road and rail and sells live shipment tracking to its customers. Its platform team runs Backstage as the company's developer portal.", src: [0, 1] },
+        facts: [
+          { label: "Founded", value: "1998", src: [0] },
+          { label: "Headquarters", value: "Rotterdam, Netherlands", src: [0] },
+          { label: "Size", value: "About 420 engineers", src: [1] },
+          { label: "Type", value: "Private company", src: [0] },
+          { label: "Leaders", value: "Priya Raman, VP Platform Engineering", src: [2] },
+          { label: "Products", value: "Freight tracking, warehouse software", src: [0] },
+        ],
+        what: [
+          { text: "Runs road and rail freight across Europe and sells customers a live view of every shipment.", src: [0] },
+          { text: "Builds its own warehouse software, used in every one of its warehouses.", src: [3] },
+          { text: "Works with Harborline Labs, whose route planning runs on Northwind's shipment data.", src: [4] },
+        ],
+        news: [
+          { when: "May 2026", text: "Hired Priya Raman as VP of Platform Engineering.", src: [2] },
+          { when: "Mar 2026", text: "Finished a zero-trust security rollout across every warehouse.", src: [3] },
+          { when: "Jun 2024", text: "Announced a partnership with Harborline Labs for freight tracking.", src: [4] },
+        ],
+        tech: [
+          { text: "Runs Backstage itself; the platform blog names the developer experience team as its owner.", src: [1] },
+          { text: "Their own blog says Backstage upgrades take the team weeks every quarter.", src: [1] },
+          { text: "Security engineering ran the zero-trust rollout, so expect a security review before any pilot.", src: [3] },
+        ],
+        forCall: [
+          { text: "Upgrades eat the platform team's time, in their own words: Portal takes that upkeep off them.", src: [1] },
+          { text: "They just finished zero trust; lead with how Portal passes a security review.", src: [3] },
+        ],
+        sources: [
+          { url: "https://northwindfreight.example/about", label: "Northwind Freight: about us" },
+          { url: "https://northwindfreight.example/blog/backstage-upgrades", label: "Northwind Freight platform blog: keeping Backstage current" },
+          { url: "https://northwindfreight.example/news/priya-raman-joins", label: "Northwind Freight news: Priya Raman joins" },
+          { url: "https://northwindfreight.example/blog/zero-trust-rollout", label: "Northwind Freight engineering blog: zero trust in every warehouse" },
+          { url: "https://news.example.com/2026/harborline-northwind", label: "Example News: Harborline Labs and Northwind Freight" },
+        ],
+      },
     },
     "Quillstack": {
-      engineers: 80, status: "New lead",
+      engineers: 80, status: "New lead", domain: "quillstack.example",
       history: [{ date: "2026-01", text: "Told them it was not a good fit yet: only 20 engineers." }],
       comeBack: { then: 20, now: 80, openJobs: 31 },
+      profile: {
+        v: 2, domain: "quillstack.example", name: "Quillstack", at: "2026-10-19T14:11:00+00:00", confidence: "high",
+        summary: { text: "Quillstack makes contract drafting and review software for in-house legal teams. Founded in 2023, it has grown to about 80 engineers and is hiring 31 more.", src: [0, 1] },
+        facts: [
+          { label: "Founded", value: "2023", src: [0] },
+          { label: "Headquarters", value: "Toronto, Canada (remote-first)", src: [0] },
+          { label: "Size", value: "About 80 engineers, 31 open roles", src: [1] },
+          { label: "Type", value: "Private, venture-backed (Series B)", src: [2] },
+          { label: "Leaders", value: "Sam Okafor, CTO and co-founder", src: [0] },
+          { label: "Product", value: "Quill, contract drafting and review", src: [3] },
+        ],
+        what: [
+          { text: "Sells Quill, a tool legal teams use to draft contracts and review the other side's changes.", src: [3] },
+          { text: "Engineering ships about 60 services, each with a named owning team.", src: [4] },
+          { text: "Every engineer has used Claude Code and Codex since early 2026.", src: [4] },
+        ],
+        news: [
+          { when: "Sep 2026", text: "Opened 31 engineering roles.", src: [1] },
+          { when: "Jun 2025", text: "Raised a Series B to grow its engineering team.", src: [2] },
+        ],
+        tech: [
+          { text: "Keeps service owners in CODEOWNERS files; the blog describes no developer portal or catalog.", src: [4] },
+          { text: "Their coding agents look up owners from those files, so ownership data matters to them every day.", src: [4] },
+        ],
+        forCall: [
+          { text: "Their agents need to know who owns what and why: that is Xirp's job, and it can feed Portal later.", src: [4] },
+          { text: "Hiring 31 engineers makes onboarding speed a live problem right now.", src: [1] },
+        ],
+        sources: [
+          { url: "https://quillstack.example/about", label: "Quillstack: about us" },
+          { url: "https://quillstack.example/careers", label: "Quillstack careers" },
+          { url: "https://news.example.com/2025/quillstack-series-b", label: "Example News: Quillstack raises a Series B" },
+          { url: "https://quillstack.example/product", label: "Quillstack: the Quill product page" },
+          { url: "https://quillstack.example/blog/agents-codebase-map", label: "Quillstack engineering blog: a map of the codebase for our agents" },
+        ],
+      },
     },
     "Rookery Retail": { engineers: 40, status: "New lead", history: [] },
     "Helix Health": { engineers: 900, status: "Customer since 2025: Portal and Confidence", history: [], customer: true },

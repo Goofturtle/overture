@@ -46,6 +46,7 @@ Meetily version moves the files, set `MEETILY_RECORDINGS_DIR` (below) or tell me
 1. Start recording in Meetily when the call starts.
 2. MOAB matches the recording to your calendar: the call that runs when Meetily starts (from 15 minutes before it to its end).
    If two calls overlap, or the call isn't in your calendar, pick it in the in-call panel and press **Use it for this call**.
+   The pick holds for that recording only: the next recording is matched by time again.
 3. The in-call panel shows **Listening via Meetily** while lines arrive. People and companies said on the call show in its People
    tab and on the People map, with **How they're connected**.
 4. Stop recording in Meetily when the call ends. MOAB reads the last lines once more and lets the transcript go.

@@ -6,8 +6,8 @@ Run from anywhere:  tks-spotify/.venv/Scripts/python.exe tks-spotify/centralize/
   GOOGLE_CLIENT_SECRET), restart, then press "Connect Google Calendar" in the app. See docs/GOOGLE-SETUP.md.
 - Records (company status, people's titles and notes, call notes, after-call updates) live in .data/records.json.
 - Claude is optional: set ANTHROPIC_API_KEY first. Without it the page uses on-device AI or its built-in rules.
-- With Claude, new guests on your calls are looked up in the background (title and relationship to their company, with public
-  sources). Only their name, company and company domain are sent; see "invitee research" below for the rules.
+- With Claude, new guests on your calls and their companies are researched in the background (work profile, past work, company
+  facts, with public sources). Only their name, company and company domain are sent; see "invitee research" below for the rules.
 - HubSpot and Gong are optional: run tools/connect.py once (docs/HUBSPOT-SETUP.md, docs/GONG-SETUP.md). MOAB reads companies,
   deals, contacts and notes from HubSpot and the last call's summary from Gong, and writes to HubSpot only when you press
   "Save to HubSpot" after a call.
@@ -83,17 +83,25 @@ DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 SYSTEM = (
     "You write a short call brief for Chris, an account executive who sells Spotify's Backstage products "
     "(Portal, Confidence and Xirp). You get the facts as JSON. Each fact says where it came from: public data, "
-    "sample data, the user's own calendar, or MOAB's records. "
+    "sample data, the user's own calendar, MOAB's records, or MOAB's own web research (each people[].profile and "
+    "company.profile, built from public pages MOAB searched and read). "
     "Use only these facts. Do not add numbers, names or claims that are not in them. "
     "Write in plain, short words that a busy salesperson can read in one minute. No headings, no metaphors. "
     "Plain text only: no markdown, no bullets, no bold. "
-    "Write 4 to 6 short lines: who they are, what changed since last time, their Backstage situation, "
-    "who matters on the call and why, and what to do before the call."
+    "Write 4 to 6 short lines: who the company is and what it does, who the people are at work (their current role and the "
+    "past work that matters), what changed since last time, their Backstage situation, who matters on the call and why, "
+    "and last, what to bring up on the call. "
+    "MOAB has already done the research and saved it to its records. So never tell the reader to look anything up, search, "
+    "research, check, verify or confirm anything, or add anything to MOAB's records, and never call a fact automatic or unconfirmed. "
+    "Leave out any to-do in the facts that asks for that. If MOAB found nothing about someone or something, say plainly that "
+    "MOAB searched and found nothing public about it. End with what to bring up on the call, never a chore to do before it."
 )
 ASK_SYSTEM = (
     "You are MOAB, a call-prep assistant for a salesperson who sells Spotify's Backstage products. "
-    "Answer the question using only the facts in the JSON you get (their calendar, MOAB's records and public Backstage data). "
-    "If the facts do not answer it, say so in one line and say what to add to MOAB's records. "
+    "Answer the question using only the facts in the JSON you get (their calendar, MOAB's records, MOAB's own web research and "
+    "public Backstage data). "
+    "If the facts do not answer it, say so in one line and say what MOAB couldn't find (MOAB has already searched its records and "
+    "the web). Never tell them to look something up or to add it to MOAB's records. "
     "Plain text only, no markdown, at most four short sentences."
 )
 
@@ -462,6 +470,25 @@ def name_from_work_email(email):
     return m.group(1).capitalize() + " " + m.group(2).capitalize()
 
 
+NAME_STOP = {"will", "and", "from", "to", "the", "is", "at", "for", "on", "with", "about", "re", "call", "meeting", "review", "intro", "sync", "here", "there"}
+
+
+def name_from_event(email, inv):
+    """No name on the invite: find '<first name> Lastname' in the event's own title or description, where the first name is
+    the one in their email (shea@acme.com + 'Call with Shea Kim' -> 'Shea Kim'). The user wrote that text, so it's a safe source."""
+    first = re.split(r"[._\-+]", str(email or "").split("@")[0].lower())[0]
+    if not re.fullmatch(r"[a-z]{2,30}", first) or first in ROLE_BOXES:
+        return ""
+    text = "\n".join([str(inv.get("title") or ""), str(inv.get("notes") or "")])[:4000]
+    for m in re.finditer(r"(?i:\b" + re.escape(first) + r")[ \t]+([A-Z][A-Za-z'’-]{1,30})(?:[ \t]+([A-Z][A-Za-z'’-]{1,30}))?", text):
+        words = [w for w in m.groups() if w]
+        while words and words[-1].lower() in NAME_STOP:
+            words.pop()
+        if words and words[0].lower() not in NAME_STOP:
+            return first.capitalize() + " " + " ".join(words)
+    return ""
+
+
 def fake_domain(d):
     """Domains reserved for examples (RFC 2606): nobody real works there."""
     d = str(d or "").lower()
@@ -578,7 +605,9 @@ def _others(ev, me_email):
         email = str(a.get("email", "")).strip().lower()
         if not email or a.get("self") or email == me_email or a.get("resource") or email.endswith("calendar.google.com"):
             continue
-        out.append({"name": str(a.get("displayName") or "").strip() or name_from_email(email), "email": email})
+        # No name on the invite: the full name written in the event itself ("Call with Shea Tough") beats the email's first word.
+        named = str(a.get("displayName") or "").strip() or name_from_event(email, {"title": ev.get("summary"), "notes": ev.get("description")})
+        out.append({"name": named or name_from_email(email), "email": email})
     return out
 
 
@@ -740,9 +769,10 @@ def build_live(events, me, records, now=None, meta_out=None, crm=None):
             met = last_met.get(email)
             meta[email] = {
                 # No name on the invite: a plain first.last work address still gives one, and the page says where it came from.
-                "name": display.get(email, "") or name_from_work_email(email), "company": co, "domain": d, "callId": inv["id"],
-                "named": bool(display.get(email) or name_from_work_email(email)),
-                "nameFrom": "invite" if display.get(email) else ("email" if name_from_work_email(email) else ""),
+                "name": display.get(email, "") or name_from_event(email, inv) or name_from_work_email(email), "company": co, "domain": d, "callId": inv["id"],
+                "start": inv.get("start", ""),  # their soonest call: deep research waits until it is DEEP_DAYS_AHEAD days away
+                "named": bool(display.get(email) or name_from_event(email, inv) or name_from_work_email(email)),
+                "nameFrom": "invite" if display.get(email) else ("event" if name_from_event(email, inv) else ("email" if name_from_work_email(email) else "")),
                 "internal": bool(mine and mine not in PERSONAL_DOMAINS and same_org(d, mine, records)),
                 "crm": bool((hs_people.get(email) or {}).get("title")),  # HubSpot has their title: no web lookup
                 "local": {"company": co, "adopter": bool(co and adopter_for(co)), "metBefore": bool(met),
@@ -754,8 +784,10 @@ def build_live(events, me, records, now=None, meta_out=None, crm=None):
                 alerted.add(email)
                 title = str(r.get("title") or "")
                 rel = RELATIONSHIPS.get(str(r.get("relationship") or ""), "")
-                text = ("MOAB looked them up automatically: " + ", ".join(x for x in (title, rel, str(r.get("team") or "")) if x) + ". Check it before the call."
-                        if r.get("lookup") == "done" else "MOAB looked them up automatically but found no public work information. Ask what they do.")
+                facts = ", ".join(x for x in (title, rel, str(r.get("team") or "")) if x)
+                summary = ((profile_view(r.get("profile"), "person") or {}).get("summary") or {}).get("text", "")
+                text = (" ".join(x for x in ("MOAB looked them up" + (": " + facts if facts else "") + ".", summary) if x)
+                        if r.get("lookup") == "done" else searched_note(r, "work information about them") + " Ask what they do on the call.")
                 watch.append({"date": short_day(to_et(found_at).date()), "kind": "New person", "callId": inv["id"], "person": a["name"],
                               "title": "New on the " + inv["company"] + " call: " + a["name"] + ", " + (title or "role unknown"), "text": text})
 
@@ -766,9 +798,13 @@ def build_live(events, me, records, now=None, meta_out=None, crm=None):
             continue
         if not any(same_org(d, md, records) for md in met_domains):
             first_done.add(co)
+            org = (records.get("orgs") or {}).get(d) or {}
+            about = ((profile_view(org.get("profile"), "org") or {}).get("summary") or {}).get("text", "")
+            if not about and org.get("lookup") == "unknown":
+                about = searched_note(org, "information about this company")
             watch.append({"date": short_day(today_et), "kind": "First meeting", "callId": inv["id"], "title": "First meeting with " + co,
-                          "text": "Nobody from " + co + " is in your calendar for the last " + str(DAYS_BACK // 30) + " months, so this looks like your first talk. "
-                          + "Look them up and add what you learn to MOAB's records."})
+                          "text": "Nobody from " + co + " is in your calendar for the last " + str(DAYS_BACK // 30) + " months, so this looks like your first talk."
+                          + (" " + about if about else "")})
 
     prefs = effective_settings(records)
     watch = apply_alert_rules(watch, prefs)  # Settings > Alert rules: job changes, new invitees
@@ -862,6 +898,7 @@ def live_script():
     data, err = None, ""
     if token_info():
         try:
+            prune_old_quotes()  # Settings > Mentions > keep quotes for N days, before the People map shows them
             records, meta = load_records(), {}
             data, _ = live_now(records, meta_out=meta)
             prefs = data.get("appSettings") or effective_settings(records)
@@ -872,8 +909,8 @@ def live_script():
                     data["watch"] = data["watch"] + alerts
             if not prefs["research"]["web"]:
                 pass  # Settings > Research sources: web research is off, so no guest is looked up on the web
-            elif queue_research(meta, records):
-                research_fill(data, records, meta)  # show the new guests as "Looking up…" at once
+            elif queue_research(meta, records) | queue_org_research(meta, records):  # | : both always run
+                research_fill(data, records, meta)  # show the new guests and companies as "Looking up…" at once
         except NotConnected:
             pass
         except GoogleError as e:
@@ -897,7 +934,7 @@ YM_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 def empty_records():
     return {"version": 1, "companies": {}, "people": {}, "callNotes": {}, "updates": {}, "settings": {}, "hubspotSaved": {},
-            "mentions": {}, "knownPeople": {}, "connections": {}, "connectionsRemoved": {}, "granola": {}}
+            "mentions": {}, "knownPeople": {}, "connections": {}, "connectionsRemoved": {}, "granola": {}, "orgs": {}}
 
 
 def load_records():
@@ -905,7 +942,8 @@ def load_records():
     if not isinstance(r, dict):
         return empty_records()
     base = empty_records()
-    for k in ("companies", "people", "callNotes", "updates", "settings", "hubspotSaved", "mentions", "knownPeople", "connections", "connectionsRemoved", "granola"):
+    for k in ("companies", "people", "callNotes", "updates", "settings", "hubspotSaved", "mentions", "knownPeople", "connections", "connectionsRemoved", "granola",
+              "orgs"):
         if isinstance(r.get(k), dict):
             base[k] = r[k]
     return base
@@ -1297,6 +1335,8 @@ def save_settings(body):
         save_json(records_path(), r)
         out = effective_settings(r)
     _SETTINGS_CACHE.clear()
+    if "mentions" in body:
+        prune_old_quotes()  # "keep quotes for" lowered: older sentences go now (it takes the records lock itself)
     return out
 
 
@@ -1429,6 +1469,35 @@ def brief_facts(body, records):
             body["people"] = [{k: v for k, v in p.items() if k != "note"} if isinstance(p, dict) else p for p in body["people"]]
         if isinstance(body.get("company"), dict):
             body["company"] = {k: v for k, v in body["company"].items() if k not in ("notes", "history")}
+    return research_facts(body, records)  # MOAB's web research is public information, so it goes whatever the setting
+
+
+def research_facts(body, records):
+    """Add MOAB's own web research to the page's brief facts (people[].profile, company.profile) where the page didn't send it:
+    a person's profile when their name and company match the call, the company's when its domain's company is the call's."""
+    call = body.get("call") if isinstance(body.get("call"), dict) else {}
+    co = norm_name(call.get("company") or "")
+    people = body.get("people") if isinstance(body.get("people"), list) else []
+    if not co:
+        return body
+    by_name = {}
+    for email, r in (records.get("people") or {}).items():
+        p = profile_view((r or {}).get("profile") if isinstance(r, dict) else None, "person")
+        if p and p["name"] and norm_name(company_for_domain(domain_of(email), records) or "") == co:
+            by_name.setdefault(norm_name(p["name"]), p)
+    body = dict(body)
+    if by_name:
+        body["people"] = [dict(p, profile=profile_for_ai(by_name[norm_name(p.get("name") or "")]))
+                          if isinstance(p, dict) and "profile" not in p and norm_name(p.get("name") or "") in by_name else p for p in people]
+    org = next((o for d, o in (records.get("orgs") or {}).items() if isinstance(o, dict) and norm_name(company_for_domain(d, records) or "") == co
+                and profile_view(o.get("profile"), "org")), None)
+    if org:
+        prof = profile_for_ai(profile_view(org["profile"], "org"))
+        if isinstance(body.get("company"), dict):
+            if "profile" not in body["company"]:
+                body["company"] = dict(body["company"], profile=prof)
+        elif body.get("company") is None:
+            body["company"] = {"source": "MOAB web research", "profile": prof}
     return body
 
 
@@ -1447,8 +1516,9 @@ def ai_trim(live, records):
 
 
 def write_brief(facts):
-    # Short timeout so the page never sits waiting; it shows the rules brief meanwhile.
-    return claude_text(SYSTEM, "Facts for the call:\n" + json.dumps(facts, indent=1), 1500, 10)
+    # Short timeout so the page never sits waiting (it waits 25 s and shows the rules brief meanwhile); research profiles make the
+    # facts longer, so 20 s.
+    return claude_text(SYSTEM, "Facts for the call:\n" + json.dumps(facts, indent=1), 1500, 20)
 
 
 SNAP_CACHE = {}
@@ -1473,7 +1543,8 @@ def ask_context(question, call_id, live, records):
 
     def who(a):
         p = people.get(a["email"]) or {}
-        return {"name": a["name"], "email": a["email"], "title": p.get("title") or None, "note": p.get("note") or None, "previously": p.get("previous") or None}
+        return {"name": a["name"], "email": a["email"], "title": p.get("title") or None, "note": p.get("note") or None, "previously": p.get("previous") or None,
+                "moabResearch": profile_for_ai((p.get("research") or {}).get("profile"))}
 
     adopters = {norm_name(a.get("org", "")): a.get("use", "") for a in snap.get("adopters", [])}
     cos = {i["company"] for i in invites}
@@ -1485,12 +1556,15 @@ def ask_context(question, call_id, live, records):
             "people": [who(a) for a in call["attendees"]], "callNotes": call.get("afterNotes", "")[:3000],
             "alerts": [w["text"] for w in live.get("watch", []) if w.get("callId") == call["id"]],
             "company": company_facts((live.get("companies") or {}).get(call["company"])),
+            "companyResearch": profile_for_ai(((live.get("companies") or {}).get(call["company"]) or {}).get("profile")),
         },
         "upcomingCalls": [{"title": i["title"], "company": i["company"], "when": i["when"], "people": [a["name"] for a in i["attendees"]]} for i in invites[:25]],
         "alerts": [w["title"] + ": " + w["text"] for w in live.get("watch", [])][:20],
         "moabRecords": {
             "companies": dict(list((records.get("companies") or {}).items())[:60]),
-            "people": dict(list((records.get("people") or {}).items())[:120]),
+            # research profiles are long: this call's people and company carry theirs above
+            "people": {e: {k: v for k, v in r.items() if k != "profile"} if isinstance(r, dict) else r
+                       for e, r in list((records.get("people") or {}).items())[:120]},
         },
         "publicData": {
             "latestBackstage": snap.get("latestRelease"),
@@ -1542,16 +1616,30 @@ def answer_question(body):
 
 
 # ---------------------------------------------------------------- invitee research ----------------------------------------------------------------
-# When someone new is invited, a background worker finds their current job and how they relate to the company.
+# When someone new is invited, a background worker researches them in depth (deep research: Claude searches the web and opens
+# and reads pages with web fetch): their current job and how they relate to the company, plus a profile (contract A: summary,
+# current role, past jobs, education, notable work, what to bring up), and the same for their company (contract B).
 # The owner's privacy rules are enforced here in code, not only in the prompt:
 # - Claude gets the guest's display name, the company name and the company's domain: never an email address or local part.
-# - People-search and data-broker sites are blocked in the web search tool and any source on them is dropped.
-# - Work information only; a field is kept only when a kept source backs it; anything else is "unknown", never a guess.
+# - People-search and data-broker sites are blocked in the web search AND web fetch tools and any source on them is dropped.
+# - Work information only; a field or bullet is kept only when a kept source (a page the search or fetch really returned)
+#   backs it; anything else is "unknown", never a guess. Bullets with contact details or personal-life details are dropped.
 # - Guests on personal mail (gmail.com and so on) are never looked up on the web.
 
 RESEARCH_DAYS = 30
 RESEARCH_TIMEOUT = 60
 WEB_SEARCH_TOOL = "web_search_20260209"
+WEB_FETCH_TOOL = "web_fetch_20260209"   # anthropic 1.15 BetaWebFetchTool20260209Param: name "web_fetch", max_uses, blocked_domains, ...
+DEEP_SEARCHES = 5          # deep research (a guest on your calls, or their company): web searches at most
+DEEP_FETCHES = 4           # and pages opened and read at most (kept low: the owner's own Claude key pays for every page)
+DEEP_DAYS_AHEAD = 7        # deep research waits until the call is this close (Look up again works any time)
+DEEP_BUDGET = 240          # seconds for one deep lookup, resends included
+DEEP_RESUMES = 8           # a search with many tool calls pauses (pause_turn) and is resent this many times at most
+DEEP_MAX_TOKENS = 10000
+FETCH_PAGE_TOKENS = 5000   # of one opened page's text, at most
+PROFILE_V = 2              # the research profile's version: a record looked up before deep research is looked up once more
+PROFILE_CHARS = 260        # one bullet, at most
+PROFILE_SOURCES = 20
 RELATIONSHIPS = {"employee": "Employee", "contractor": "Contractor or agency", "partner": "Partner",
                  "investor": "Investor or board", "customer": "Customer", "other": "Other", "unknown": "Unknown"}
 SENIORITY = {"executive", "director", "manager", "senior", "individual contributor"}
@@ -1574,31 +1662,75 @@ BLOCKED_DOMAINS = [
     "bsky.app", "reddit.com", "vk.com",
 ]
 # Never sent anywhere, never shown: what the research layer adds to a person's record.
-AUTO_KEYS = {"team", "seniority", "relationship", "tenure", "sources", "found", "foundAt", "confidence", "autoFields", "lookup"}
+AUTO_KEYS = {"team", "seniority", "relationship", "tenure", "sources", "found", "foundAt", "confidence", "autoFields", "lookup",
+             "profile", "deepAt", "searched"}
 
+_ITEMS_RULES = (
+    "Number the pages in sources from 1 (1 is the first). Every item lists the numbers of the pages that say it; leave out "
+    "anything no page says. List in sources only pages you really got from a search or opened, at most 15. "
+    "Write each item as one plain sentence of at most 40 words, in your own words. "
+)
 RESEARCH_SYSTEM = (
-    "You look up one person's current job for a salesperson's call prep. Work information only. "
-    "Search the web for the person's name together with the company. Use only public professional sources: "
-    "the company's own website, conference talks, press releases and news, GitHub, published articles, "
-    "and the person's own public professional profile. "
-    "Never search for or report personal details: no personal email, phone number, home address, family, age, photos, "
-    "or social media beyond a professional profile. Never guess or look up an email address. "
-    "Never use people-search or contact-data sites. "
-    "If you can't find this exact person at this company in a public source, report found false. Do not guess. "
-    "If several people share the name and you can't tell which one this is, report found false.\n"
+    "You research one person in depth for a salesperson's call prep: who they are at work, what they do now, and the work "
+    "they did before. Work information only. The salesperson sells Spotify's Backstage products (Portal, Confidence and Xirp). "
+    "Do real research, not one search: search the person's name with the company; once you know their past employers, search "
+    "their name with those; and search their name with words like talk, podcast, interview, article, blog or GitHub. "
+    "Open (fetch) the most useful pages and read them: the company's team, about or leadership pages, the person's own public "
+    "professional profile, their talks, articles and interviews, and press about their work. "
+    "Use only public professional sources. Never use people-search or contact-data sites. Never search for or report personal "
+    "details: no email address, phone number, home address, family or relationships, age or birthday, photos, health, religion "
+    "or politics, and no social media beyond a professional profile. Never guess or look up an email address. "
+    "Make sure each page is about this same person: the name matches and the page ties them to this company now, or is clearly "
+    "the same person's career. If several people share the name and you can't tell which one this is, report found false. "
+    "If you can't find this exact person at this company in a public source, report found false. Do not guess.\n"
     "Answer with one JSON object and nothing else, in exactly this shape:\n"
-    '{"found": true or false, "title": "current job title, or empty", "team": "team or department, or empty", '
+    '{"found": true or false, "confidence": "high, medium or low", '
+    '"title": "current job title, or empty", "team": "team or department, or empty", '
     '"seniority": "one of executive, director, manager, senior, individual contributor, or empty", '
     '"tenure": "roughly how long they have been at the company if public, like about 3 years, or empty", '
     '"relationship": "one of employee, contractor, partner, investor, other, unknown", '
-    '"confidence": "high, medium or low", '
     '"sources": [{"url": "https://...", "label": "short name of the page", '
-    '"supports": ["the fields this page backs: title, team, seniority, tenure, relationship"]}]}\n'
+    '"supports": ["the fields above this page backs: title, team, seniority, tenure, relationship (may be empty)"]}], '
+    '"summary": {"text": "1 or 2 sentences: who they are at work", "sources": [1]}, '
+    '"now": [{"text": "one fact about their current role: what they own, their team, its size or scope, their focus", "sources": [1]}], '
+    '"past": [{"role": "job title", "org": "company", "when": "like 2019 - 2022, or empty", "sources": [2], '
+    '"points": [{"text": "what they did or achieved there", "sources": [2]}]}], '
+    '"education": [{"text": "degree and school, as listed on a professional profile", "sources": [2]}], '
+    '"work": [{"text": "a talk, article, podcast, project, open-source work or press about their work", "sources": [3]}], '
+    '"forCall": [{"text": "something worth bringing up with them on this call, built only on the facts above", "sources": [1]}]}\n'
+    + _ITEMS_RULES +
+    "Give up to 6 now items, up to 8 past jobs (newest first) with up to 4 points each, up to 3 education items, up to 6 work "
+    "items and up to 4 forCall items. "
     "relationship means their relationship to the company: employee, contractor (or agency), partner, investor (or board member), "
-    "other, or unknown. Give 1 to 3 sources. Every field you fill must be backed by a source that lists it in supports."
+    "other, or unknown. Every field above sources that you fill must be backed by a source that lists it in supports."
+)
+ORG_RESEARCH_SYSTEM = (
+    "You research one company in depth for a salesperson's call prep. He sells Spotify's Backstage products (Portal, Confidence "
+    "and Xirp). Business information only. "
+    "Do real research, not one search: open (fetch) the company's own website (home, about, team or leadership, products or "
+    "programs, careers, engineering blog), search for the company by name and website, and search for recent news about it. "
+    "Read the pages you open. Make sure every page is about the company at this website, not another one with a similar name. "
+    "Use only public sources: the company's own site, news, press releases, its public profiles and its engineering or open-source "
+    "work. Never use people-search or contact-data sites, and never report anyone's personal details (email address, phone number, "
+    "home address, family). "
+    "If you can't find this company in a public source, report found false. Do not guess.\n"
+    "Answer with one JSON object and nothing else, in exactly this shape:\n"
+    '{"found": true or false, "confidence": "high, medium or low", "name": "the company\'s real full name, as it calls itself", '
+    '"sources": [{"url": "https://...", "label": "short name of the page"}], '
+    '"summary": {"text": "1 or 2 sentences: what the company is and does", "sources": [1]}, '
+    '"facts": [{"label": "Founded, Headquarters, Size, Type, Leaders or Programs/Products", "value": "a few words", "sources": [1]}], '
+    '"what": [{"text": "one fact about what they do: products or programs, customers or who they serve, how they work", "sources": [1]}], '
+    '"news": [{"text": "a recent change or piece of news", "when": "like March 2026, or empty", "sources": [2]}], '
+    '"tech": [{"text": "a fact about their engineering or developer tooling: team, stack, developer portal, open source, feature '
+    'flags or experiments, anything relevant to Backstage", "sources": [3]}], '
+    '"forCall": [{"text": "something worth bringing up on this call, built only on the facts above", "sources": [1]}]}\n'
+    + _ITEMS_RULES +
+    "Give up to 8 facts, up to 6 what items, up to 5 news items (newest first, from the last two years), up to 6 tech items "
+    "(none if no page says), and up to 4 forCall items."
 )
 
-# One queue for every lookup. Jobs: a guest's email (invitee research), "mention:<call>:<id>" (someone said on a call) and
+# One queue for every lookup. Jobs: a guest's email (invitee research), "co:<domain>" (company research, like invitee research
+# it never takes the last free worker), "mention:<call>:<id>" (someone said on a call) and
 # "org:<call>:<id>" (how a company said on a call relates to the call's company). running: the keys being looked up right now.
 RQ = {"queue": [], "pending": set(), "running": set(), "errors": {}, "meta": {}, "mentions": {}}  # mentions: key -> job
 RQ_LOCK = threading.Condition()
@@ -1656,14 +1788,23 @@ def skip_reason(email, m, rec, forced=False):
         return "No name on the invite, and their email address doesn't show one, so MOAB can't look them up."
     if m.get("crm") or rec.get("found") == "confirmed" or (not forced and user_has_title(rec)):
         return " "  # HubSpot has their title, or the user filled this in or confirmed it: nothing to say
+    if not source_on("web"):  # also when it was queued before web research was turned off: the worker asks again
+        return WEB_OFF_NOTE
     if not claude_on():
         return NO_KEY_NOTE
     return ""
 
 
 def needs_research(rec, now):
-    """No title yet, and not looked up in the last 30 days."""
-    if rec.get("title") or rec.get("found") == "confirmed":
+    """Looked up before deep research existed (no profile of this version): once more, even with a title MOAB found. Otherwise:
+    no title yet, and not looked up in the last 30 days. Never when you confirmed them or typed their title."""
+    if rec.get("found") == "confirmed" or user_has_title(rec):
+        return False
+    prof = rec.get("profile")
+    old_profile = isinstance(prof, dict) and not (isinstance(prof.get("v"), int) and prof["v"] >= PROFILE_V)
+    if rec.get("lookup") in ("done", "unknown") and (not rec.get("deepAt") or old_profile):
+        return True
+    if rec.get("title"):
         return False
     at = parse_dt(rec.get("foundAt"))
     return not at or now - at > timedelta(days=RESEARCH_DAYS)
@@ -1680,7 +1821,7 @@ def queue_research(meta, records, now=None):
             rec = people.get(email) or {}
             if email in RQ["pending"] or email in RQ["running"] or email in RQ["errors"]:
                 continue
-            if skip_reason(email, m, rec) or not needs_research(rec, now):
+            if skip_reason(email, m, rec) or not call_soon(m, now) or not needs_research(rec, now):
                 continue
             RQ["queue"].append((email, False))
             RQ["pending"].add(email)
@@ -1716,6 +1857,169 @@ def request_research(email):
     if RESEARCH_AUTOSTART:
         ensure_worker()
     return 202, {"ok": True, "status": "pending"}
+
+
+# ---- company research: the outside companies on your upcoming calls, by their email domain (job key "co:<domain>") ----
+# Only the company's name and domain are sent. Personal mail, example domains and your own company are never looked up.
+
+ORG_NO_KEY_NOTE = "Add a Claude key to look up companies automatically"
+
+
+def org_meta(meta):
+    """domain -> {name, domain, callId} for each outside company among the guests on your upcoming calls (meta from build_live)."""
+    out = {}
+    for m in (meta or {}).values():
+        d = str(m.get("domain") or "").lower()
+        if not d or d in out or m.get("internal") or personal_domain(d) or not DOMAIN_RE.match(d):
+            continue
+        out[d] = {"name": str(m.get("company") or "") or name_from_domain(d), "domain": d, "callId": str(m.get("callId") or ""),
+                  "start": str(m.get("start") or "")}
+    return out
+
+
+def call_soon(m, now):
+    """Deep research costs Claude tokens, so it runs only for calls in the next DEEP_DAYS_AHEAD days (or with no known start)."""
+    at = parse_dt((m or {}).get("start"))
+    return not at or at - now <= timedelta(days=DEEP_DAYS_AHEAD)
+
+
+def org_skip_reason(domain):
+    """Why this company is not looked up on the web ("" when it can be)."""
+    if fake_domain(domain):
+        return "Can't find this company: " + domain + " isn't a real company (it's an example address), so there is nothing to look up."
+    if not source_on("web"):  # also when it was queued before web research was turned off
+        return WEB_OFF_NOTE
+    if not claude_on():
+        return ORG_NO_KEY_NOTE
+    return ""
+
+
+def org_needs_research(rec, now):
+    """Not looked up in the last 30 days (or looked up before deep research)."""
+    at = parse_dt((rec or {}).get("foundAt"))
+    prof = (rec or {}).get("profile")
+    old_profile = isinstance(prof, dict) and not (isinstance(prof.get("v"), int) and prof["v"] >= PROFILE_V)
+    return not at or old_profile or now - at > timedelta(days=RESEARCH_DAYS)
+
+
+def queue_org_research(meta, records, now=None):
+    """Queue each outside company on your upcoming calls that hasn't been looked up in 30 days. True when something new was queued."""
+    now = now or datetime.now(timezone.utc)
+    orgs = records.get("orgs") or {}
+    added = False
+    with RQ_LOCK:
+        RQ["meta"] = dict(meta)  # the guests on your upcoming calls right now (queue_research keeps the same)
+        for d, om in org_meta(meta).items():
+            key = "co:" + d
+            if key in RQ["pending"] or key in RQ["running"] or key in RQ["errors"]:
+                continue
+            if org_skip_reason(d) or not call_soon(om, now) or not org_needs_research(orgs.get(d), now):
+                continue
+            RQ["queue"].append((key, False))
+            RQ["pending"].add(key)
+            added = True
+        if added:
+            RQ_LOCK.notify_all()
+    if added and RESEARCH_AUTOSTART:
+        ensure_worker()
+    return added
+
+
+def request_org_research(domain):
+    """POST /api/research/org: look this company up again now, even within 30 days. Returns (status code, body)."""
+    domain = str(domain or "").strip().lower()
+    if not DOMAIN_RE.match(domain):
+        return 400, {"error": "domain doesn't look right"}
+    with RQ_LOCK:
+        known = domain in org_meta(RQ["meta"])
+    if not known:
+        return 404, {"error": "That company isn't on one of your upcoming calls."}
+    reason = org_skip_reason(domain)
+    if reason == ORG_NO_KEY_NOTE:
+        return 503, {"error": "no-key"}
+    if reason:
+        return 400, {"error": reason}
+    key = "co:" + domain
+    with RQ_LOCK:
+        RQ["errors"].pop(key, None)
+        if key not in RQ["pending"] and key not in RQ["running"]:
+            RQ["queue"].append((key, True))
+            RQ["pending"].add(key)
+            RQ_LOCK.notify_all()
+    if RESEARCH_AUTOSTART:
+        ensure_worker()
+    return 202, {"ok": True, "status": "pending"}
+
+
+def do_org_research(domain, forced=False, now=None):
+    now = now or datetime.now(timezone.utc)
+    with RQ_LOCK:
+        om = org_meta(RQ["meta"]).get(domain)
+    rec = (load_records().get("orgs") or {}).get(domain) or {}
+    if not om or org_skip_reason(domain) or (not forced and not org_needs_research(rec, now)):
+        return None
+    return merge_org(domain, om["name"], research_org(om["name"], domain), now)
+
+
+def org_research_request(name, domain):
+    """The exact request for one company: its name and its website. Nothing else."""
+    name, domain = clean_text(name, 120), str(domain or "").lower()
+    if "@" in name or not DOMAIN_RE.match(domain) or personal_domain(domain) or fake_domain(domain):
+        raise ResearchError("not enough to look it up")
+    user = ("Company: " + (name or domain) + "\nCompany website: https://" + domain
+            + "\n\nResearch this company in depth: what it is and does, its key facts, recent news, and its engineering and developer "
+              "tooling. Answer with the JSON object only.")
+    return deep_request(ORG_RESEARCH_SYSTEM, user)
+
+
+def research_org(name, domain):
+    """Ask Claude (searching and reading the web) about one company. Returns {"profile": contract B or None, "searched": sites}."""
+    stop, text, seen = run_search(org_research_request(name, domain), DEEP_BUDGET, DEEP_RESUMES)
+    if stop == "refusal":
+        return {"profile": None, "searched": 0}
+    obj = extract_json(text)
+    return {"profile": clean_profile(obj, seen, "org", name=name, domain=domain), "searched": sites_searched(seen)}
+
+
+def merge_org(domain, name, result, now=None):
+    """Save a company's research under records.orgs[domain]."""
+    now = now or datetime.now(timezone.utc)
+    with RECORDS_LOCK:
+        r = load_records()
+        o = r["orgs"].setdefault(domain, {})
+        o.update(name=name, foundAt=now.replace(microsecond=0).isoformat(), lookup="done" if result.get("profile") else "unknown",
+                 searched=int(result.get("searched") or 0))
+        if result.get("profile"):
+            o["profile"] = result["profile"]
+        elif not profile_view(o.get("profile"), "org"):
+            o.pop("profile", None)  # an older kind of profile: gone, so it isn't looked up again and again
+        if len(json.dumps(r)) > MAX_RECORDS_BYTES:
+            raise ResearchError("the records store is full")
+        save_json(records_path(), r)
+        return dict(o)
+
+
+def org_research_status(domain, rec):
+    key = "co:" + domain
+    with RQ_LOCK:
+        if key in RQ["pending"] or key in RQ["running"]:
+            return "pending", "Looking up…"
+        err = RQ["errors"].get(key)
+    if err:
+        return "error", "Couldn't look it up: " + err + "."
+    if rec.get("lookup") == "done":
+        return "done", ""
+    if rec.get("lookup") == "unknown":
+        return "unknown", searched_note(rec, "information about this company")
+    return "skipped", org_skip_reason(domain)
+
+
+def org_research_view(domain, om, rec):
+    """What the page shows about one company's research (all text is escaped by the page)."""
+    rec = rec if isinstance(rec, dict) else {}
+    status, note = org_research_status(domain, rec)
+    return {"status": status, "note": note, "domain": domain, "company": str((om or {}).get("name") or ""),
+            "foundAt": str(rec.get("foundAt") or ""), "profile": profile_view(rec.get("profile"), "org")}
 
 
 def ensure_worker():
@@ -1773,6 +2077,8 @@ def research_step(now=None):
                 do_org_lookup(job, now)
             elif job:
                 do_mention_lookup(job, now)
+        elif email.startswith("co:"):  # a company on your upcoming calls (see "company research")
+            do_org_research(email[3:], forced, now)
         else:
             do_research(email, m, forced, now)
     except ResearchError as e:
@@ -1863,15 +2169,33 @@ def search_request(system, user, max_uses=5):
     }
 
 
+def deep_request(system, user):
+    """One Claude request for deep research: web search and web fetch (open and read a page), with data-broker and personal social
+    sites blocked in BOTH tools, medium effort, and room for a long answer. Only `user` (a name, a company and its website) goes."""
+    blocked = list(dict.fromkeys(list(BLOCKED_DOMAINS) + extra_blocked()))
+    return {
+        "model": MODEL, "max_tokens": DEEP_MAX_TOKENS, "betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default",
+        "output_config": {"effort": "medium"}, "system": system,
+        "tools": [{"type": WEB_SEARCH_TOOL, "name": "web_search", "max_uses": DEEP_SEARCHES, "blocked_domains": blocked},
+                  {"type": WEB_FETCH_TOOL, "name": "web_fetch", "max_uses": DEEP_FETCHES, "blocked_domains": list(blocked),
+                   "max_content_tokens": FETCH_PAGE_TOKENS}],
+        # Automatic prompt caching: each search and page read is cached as it arrives, so the steps after it read it back at a
+        # tenth of the price instead of paying full price again (most of a deep lookup's input tokens are these re-reads).
+        "cache_control": {"type": "ephemeral"},
+        "messages": [{"role": "user", "content": user}],
+    }
+
+
 def research_request(name, company, domain, email):
     """The exact request sent to Claude. Only the display name, company name and company domain go in it."""
     name, company, domain = clean_text(name, 100), clean_text(company, 120), str(domain or "").lower()
     if not name or "@" in name or "@" in company or not DOMAIN_RE.match(domain) or personal_domain(domain):
         raise ResearchError("not enough to look them up")
-    user = ("Person: " + name + "\nCompany: " + (company or domain) + "\nCompany website: " + domain
-            + "\n\nFind this person's current job title, team, seniority, roughly how long they have been at the company (if public), "
-              "and their relationship to the company. Answer with the JSON object only.")
-    req = search_request(RESEARCH_SYSTEM, user)
+    user = ("Person: " + name + "\nCompany: " + (company or domain) + "\nCompany website: https://" + domain
+            + "\n\nResearch this person's work in depth: their current role (title, team, seniority, roughly how long they have been "
+              "at the company, and their relationship to it), their past jobs, education as listed on professional profiles, and "
+              "their notable work. Answer with the JSON object only.")
+    req = deep_request(RESEARCH_SYSTEM, user)
     if leaks_email(user, email, name):  # belt and braces: refuse rather than send an address
         raise ResearchError("their name looks like their email address, so MOAB didn't send it")
     return req
@@ -1946,18 +2270,27 @@ def clean_research(obj, seen=None):
 
 
 def research_person(name, company, domain, email):
-    """Ask Claude (with web search) who this person is. Returns a clean result; raises ResearchError if Claude can't be reached
-    or the answer was cut off."""
-    stop, text, seen = run_search(research_request(name, company, domain, email))
+    """Ask Claude (searching and reading the web) who this person is at work. Returns a clean result: the quick fields (title,
+    team, ...), "profile" (contract A, or None) and "searched" (how many sites the research saw). Raises ResearchError if Claude
+    can't be reached or the answer was cut off."""
+    stop, text, seen = run_search(research_request(name, company, domain, email), DEEP_BUDGET, DEEP_RESUMES)
     if stop == "refusal":
-        return unknown_result()
-    return clean_research(extract_json(text), seen)
+        return dict(unknown_result(), profile=None, searched=0)
+    obj = extract_json(text)
+    out = clean_research(obj, seen)
+    profile = clean_profile(obj, seen, "person", name=clean_text(name, 100))
+    if profile and out["status"] != "done":  # found and sourced, only without a title: still found
+        out.update(status="done", confidence=profile["confidence"])
+    return dict(out, profile=profile, searched=sites_searched(seen))
 
 
-def run_search(req, budget=None):
-    """Send one search_request. Returns (stop reason, answer text, the URLs the search really returned).
-    budget (seconds), when given, caps the whole lookup: each request times out within it (the SDK's per-request timeout, no
-    slow retries) and a paused search isn't resumed after it. Raises ResearchError if Claude can't be reached or the answer was cut off."""
+def run_search(req, budget=None, resumes=3):
+    """Send one search_request (or deep_request). Returns (stop reason, answer text, seen): seen holds the pages the search really
+    returned or web fetch really opened, as url_key -> {"cited": the words the search's citations quote from that page
+    (cited_text), "age": its date (page_age) as YYYY-MM-DD or ""}. budget (seconds), when given, caps the whole lookup: each
+    request times out within it (the SDK's per-request timeout, no slow retries) and a paused search isn't resumed after it.
+    resumes: how many times a paused search (pause_turn) is resent at most. Raises ResearchError if Claude can't be reached or
+    the answer was cut off."""
     req = dict(req)
     messages = req.pop("messages")
     start = _time.monotonic()
@@ -1968,13 +2301,15 @@ def run_search(req, budget=None):
             return base.with_options(timeout=float(seconds), max_retries=0) if budget and hasattr(base, "with_options") else base
         resp = within(budget).beta.messages.create(messages=messages, **req)
         responses = [resp]
-        for _ in range(3):  # a long server-side search can pause; resend to let it finish
+        for _ in range(resumes):  # a long server-side search can pause; resend to let it finish
             if _get(resp, "stop_reason") != "pause_turn":
                 break
             left = budget - (_time.monotonic() - start) if budget else None
             if left is not None and left <= 1:
                 break
-            resp = within(left).beta.messages.create(messages=messages[:1] + [{"role": "assistant", "content": _get(resp, "content")}], **req)
+            box = _get(_get(resp, "container"), "id")  # dynamic filtering runs code: the paused code goes on in its own container
+            more = dict(req, container=box) if isinstance(box, str) and box else req
+            resp = within(left).beta.messages.create(messages=messages[:1] + [{"role": "assistant", "content": _get(resp, "content")}], **more)
             responses.append(resp)
     except ImportError:
         raise ResearchError("the anthropic package is not installed") from None
@@ -1982,20 +2317,80 @@ def run_search(req, budget=None):
         raise ResearchError(api_error_text(e)) from None
     stop = _get(resp, "stop_reason")
     if stop == "refusal":
-        return stop, "", set()
+        return stop, "", {}
     if stop in ("pause_turn", "max_tokens"):  # cut off: not a "found nothing", so it isn't saved
         raise ResearchError("the lookup didn't finish")
-    seen = set()
+    seen = {}
+
+    def page(u):
+        return seen.setdefault(url_key(u), {"cited": [], "age": ""})
+    asked = {}  # web_fetch's tool use id -> the address Claude asked it to open
     for r in responses:
         for b in _get(r, "content") or []:
+            if _get(b, "type") == "server_tool_use" and _get(b, "name") == "web_fetch" and isinstance(_get(b, "input"), dict):
+                asked[_get(b, "id")] = _get(b, "input").get("url")
+    for r in responses:
+        for b in _get(r, "content") or []:  # other blocks (dynamic filtering's code runs, ...) add nothing
             if _get(b, "type") == "web_search_tool_result" and isinstance(_get(b, "content"), list):
-                seen |= {url_key(u) for u in (safe_url(_get(x, "url")) for x in _get(b, "content")) if u}
+                for x in _get(b, "content"):
+                    u = safe_url(_get(x, "url"))
+                    if u:
+                        p = page(u)
+                        p["age"] = p["age"] or page_day(_get(x, "page_age"))
+            if _get(b, "type") == "web_fetch_tool_result" and _get(_get(b, "content"), "type") == "web_fetch_result":
+                for u in (_get(_get(b, "content"), "url"), asked.get(_get(b, "tool_use_id"))):  # opened: where it landed and what was asked
+                    u = safe_url(u)
+                    if u:
+                        page(u)
             for c in _get(b, "citations") or []:
                 u = safe_url(_get(c, "url"))
                 if u:
-                    seen.add(url_key(u))
+                    t = _get(c, "cited_text")
+                    page(u)["cited"] += [t[:2000]] if isinstance(t, str) and t.strip() else []
     text = "".join(_get(b, "text") or "" for b in _get(resp, "content") or [] if _get(b, "type") == "text")
+    log_usage(responses)
     return stop, text, seen
+
+
+USAGE = {"lookups": 0, "input": 0, "output": 0}  # Claude tokens research used since the server started
+
+
+def log_usage(responses):
+    """Add up one lookup's Claude tokens (all resends) and print them, so the cost of research can be measured."""
+    n = {"input": 0, "cached": 0, "written": 0, "output": 0, "searches": 0, "fetches": 0}
+    for r in responses:
+        u = _get(r, "usage")
+        if u is None:
+            continue
+        for k, f in (("input", "input_tokens"), ("cached", "cache_read_input_tokens"), ("written", "cache_creation_input_tokens"),
+                     ("output", "output_tokens")):
+            v = _get(u, f)
+            n[k] += v if isinstance(v, int) else 0
+        st = _get(u, "server_tool_use")
+        for k, f in (("searches", "web_search_requests"), ("fetches", "web_fetch_requests")):
+            v = _get(st, f) if st is not None else None
+            n[k] += v if isinstance(v, int) else 0
+    with RQ_LOCK:
+        USAGE["lookups"] += 1
+        USAGE["input"] += n["input"] + n["cached"] + n["written"]
+        USAGE["output"] += n["output"]
+    print("[research] tokens in " + str(n["input"] + n["cached"] + n["written"]) + " (full price " + str(n["input"]) + ", cache reads "
+          + str(n["cached"]) + ", cache writes " + str(n["written"]) + "), out " + str(n["output"])
+          + "; searches " + str(n["searches"]) + ", pages opened " + str(n["fetches"]) + "; resends " + str(len(responses) - 1), flush=True)
+
+
+def page_day(v):
+    """The search's page_age ("April 30, 2025", "Apr 30, 2025", "2025-04-30T…") as YYYY-MM-DD; "" for anything else
+    ("3 days ago" included)."""
+    s = clean_text(v, 40)
+    m = re.match(r"(\d{4}-\d{2}-\d{2})(?:$|[T ])", s)
+    tries = [(m.group(1), "%Y-%m-%d")] if m else [(s, f) for f in ("%B %d, %Y", "%b %d, %Y", "%d %B %Y", "%d %b %Y")]
+    for t, fmt in tries:
+        try:
+            return datetime.strptime(t, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    return ""
 
 
 def merge_research(email, result, now=None):
@@ -2018,10 +2413,198 @@ def merge_research(email, result, now=None):
         rec["foundAt"] = now.replace(microsecond=0).isoformat()
         rec["lookup"] = result.get("status", "unknown")
         rec["confidence"] = result.get("confidence", "") if result.get("status") == "done" else ""
+        if "profile" in result:  # deep research ran (research_person): its profile, and that it ran, so it isn't redone for 30 days
+            rec["deepAt"], rec["searched"] = rec["foundAt"], int(result.get("searched") or 0)
+            if result.get("profile"):
+                rec["profile"] = result["profile"]
+            elif not profile_view(rec.get("profile"), "person"):
+                rec.pop("profile", None)  # an older kind of profile: gone, so it isn't looked up again and again
         if len(json.dumps(r)) > MAX_RECORDS_BYTES:
             raise ResearchError("the records store is full")
         save_json(records_path(), r)
         return dict(rec)
+
+
+def sites_searched(seen):
+    """How many sites (hosts) the research saw, blocked ones left out."""
+    return len({h for h in (k.split("/", 1)[0] for k in seen or {}) if h and not blocked_url("https://" + h + "/")})
+
+
+def searched_note(rec, what):
+    """The plain note for research that found nothing, like "MOAB searched 6 sites and found no public work information about them."."""
+    n = rec.get("searched") if isinstance(rec.get("searched"), int) and not isinstance(rec.get("searched"), bool) else 0
+    return ("MOAB searched " + (str(n) + (" site" if n == 1 else " sites") if n > 0 else "the web") + " and found no public " + what + ".")
+
+
+# ---- research profiles (contract A: a person, B: a company) ----
+# Built in code from Claude's JSON: each bullet is kept only when it cites a page the search or web fetch really returned (and
+# that no blocked site holds), with no email address, phone number or personal-life detail in it. Stored profiles are checked
+# again before the page gets them (a site you block later drops its bullets).
+
+PROFILE_PHONE_RE = re.compile(r"\+\d[\d\s().-]{6,}\d|\(?\b\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b|\b\d{10,13}\b")  # not "2019 - 2022"
+PERSONAL_RE = re.compile(
+    r"(?i)\b(?:spouses?|wife|wives|husbands?|married|marriage|fianc[ée]e?|divorc\w*|girlfriend|boyfriend|"
+    r"(?:his|her|their|has|have)\s+(?:\w+\s+)?(?:children|kids|daughters?|sons?|child|baby|babies|family)|"
+    r"(?:father|mother|mom|mum|dad|parent)\s+of|age\s+\d{1,3}|(?:his|her|their)\s+age|\d{1,3}[- ]years?[- ]old|born\s+(?:on|in)|birthday|"
+    r"home\s+address|lives\s+in|resides\s+in|religio\w*|(?:his|her|their)\s+faith|political\s+(?:part(?:y|ies)|views?|affiliation|leanings?)|"
+    r"votes?\s+for|(?:his|her|their)\s+(?:health|illness|condition|diagnosis|recovery)|health\s+(?:condition|issue|problem|scare)s?|"
+    r"diagnos(?:ed|is|es)|illness|pregnan\w*)\b")
+PERSON_LISTS = (("now", 6), ("education", 3), ("work", 6), ("forCall", 4))
+ORG_LISTS = (("what", 6), ("tech", 6), ("forCall", 4))
+
+
+def _profile_text(v, limit, personal=True):
+    """One cleaned piece of a profile, cut to `limit` characters, or "" when it holds contact details or (for a person) their
+    personal life."""
+    t = clip(v, limit) if isinstance(v, str) else ""
+    if not t or "@" in t or PROFILE_PHONE_RE.search(t) or re.search(r"(?i)\b(?:https?://|www\.)", t) or (personal and PERSONAL_RE.search(t)):
+        return ""
+    return t
+
+
+def _profile_refs(refs, resolve):
+    out = []
+    for c in refs if isinstance(refs, list) else []:
+        i = resolve(c)
+        if i is not None and i not in out:
+            out.append(i)
+    return out
+
+
+def _profile_lines(items, resolve, limit, personal, when=False, chars=PROFILE_CHARS):
+    out = []
+    for e in items if isinstance(items, list) else []:
+        if not isinstance(e, dict):
+            continue  # a bare sentence names no source: dropped
+        text = _profile_text(e.get("text"), chars, personal)
+        src = _profile_refs(e.get("src", e.get("sources")), resolve)
+        if text and src:
+            out.append(dict({"text": text, "src": src}, **({"when": _profile_text(e.get("when"), 40, personal)} if when else {})))
+        if len(out) == limit:
+            break
+    return out
+
+
+def _profile_body(obj, kind, resolve):
+    """The sections of a profile (from Claude's JSON or a stored profile), every src list holding what resolve() gives."""
+    personal = kind == "person"
+    s = obj.get("summary")
+    body = {"summary": (_profile_lines([s], resolve, 1, personal, chars=400) or [None])[0] if isinstance(s, dict) else None}
+    for key, n in PERSON_LISTS if personal else ORG_LISTS:
+        body[key] = _profile_lines(obj.get(key), resolve, n, personal)
+    if personal:
+        past = []
+        for e in obj.get("past") if isinstance(obj.get("past"), list) else []:
+            if not isinstance(e, dict):
+                continue
+            role, org = _profile_text(e.get("role"), 120), _profile_text(e.get("org"), 120)
+            points = _profile_lines(e.get("points"), resolve, 4, True)
+            src = _profile_refs(e.get("src", e.get("sources")), resolve) or sorted({i for p in points for i in p["src"]})
+            if (role or org) and src:
+                past.append({"role": role, "org": org, "when": _profile_text(e.get("when"), 40), "src": src, "points": points})
+            if len(past) == 8:
+                break
+        body["past"] = past
+    else:
+        facts = []
+        for e in obj.get("facts") if isinstance(obj.get("facts"), list) else []:
+            if not isinstance(e, dict):
+                continue
+            label, value = _profile_text(e.get("label"), 40, False), _profile_text(e.get("value"), 200, False)
+            src = _profile_refs(e.get("src", e.get("sources")), resolve)
+            if label and value and src:
+                facts.append({"label": label, "value": value, "src": src})
+            if len(facts) == 8:
+                break
+        body["facts"] = facts
+        body["news"] = _profile_lines(obj.get("news"), resolve, 5, False, when=True)
+    return body
+
+
+def _profile_finish(kind, body, cands, head):
+    """The profile, with only the sources its bullets cite (renumbered from 0 in their order), or None when nothing is left."""
+    content = ("summary", "now", "past", "education", "work") if kind == "person" else ("summary", "facts", "what", "news", "tech")
+    if not any(body.get(k) for k in content):
+        return None
+    holders = ([body["summary"]] if body.get("summary") else []) + [e for k, v in body.items() if isinstance(v, list) for e in v]
+    holders += [p for e in body.get("past") or [] for p in e["points"]]
+    used = sorted({i for h in holders for i in h["src"]})
+    remap = {old: new for new, old in enumerate(used)}
+    for h in holders:
+        h["src"] = [remap[i] for i in h["src"]]
+    return dict({"v": PROFILE_V}, **head, **body, sources=[cands[i] for i in used])
+
+
+def _source_label(s, url):
+    label = _profile_text(s.get("label"), 120, False) if isinstance(s, dict) else ""
+    return label or urllib.parse.urlsplit(url).hostname
+
+
+def clean_profile(obj, seen, kind, name="", domain=""):
+    """Claude's deep-research JSON -> a person profile (contract A) or a company profile (contract B), or None. Its sources are
+    the pages it cites that the search or web fetch really returned (seen, from run_search) and that no blocked site holds."""
+    if not isinstance(obj, dict) or obj.get("found") is not True or obj.get("confidence") not in ("high", "medium"):
+        return None
+    cands, by_num, by_key = [], {}, {}
+    for n, s in enumerate(obj.get("sources") if isinstance(obj.get("sources"), list) else [], 1):
+        url = safe_url(s.get("url")) if isinstance(s, dict) else ""
+        if not url or blocked_url(url) or url_key(url) not in (seen or {}):
+            continue  # off-list, on a blocked site, or never returned by the search or web fetch
+        k = url_key(url)
+        if k not in by_key and len(cands) < PROFILE_SOURCES:
+            by_key[k] = len(cands)
+            cands.append({"url": url, "label": _source_label(s, url)})
+        if k in by_key:
+            by_num[n] = by_key[k]
+
+    def resolve(c):  # Claude cites a page by its number in its sources list (1 = the first) or by its address
+        if isinstance(c, int) and not isinstance(c, bool):
+            return by_num.get(c)
+        u = safe_url(c) if isinstance(c, str) else ""
+        return by_key.get(url_key(u)) if u else None
+    head = {"name": clean_text(name, 120), "at": now_iso(), "confidence": obj["confidence"]}
+    if kind == "org":
+        real = _profile_text(obj.get("name"), 120, False)
+        head = dict(head, domain=str(domain or "").lower(), name=real or clean_text(name, 120))
+    return _profile_finish(kind, _profile_body(obj, kind, resolve), cands, head)
+
+
+def profile_view(p, kind):
+    """A stored profile, checked again for the page: sources on a site blocked since (Settings) are dropped and the bullets that
+    only cite them go too. None when there is no profile of this version."""
+    if not isinstance(p, dict) or p.get("v") != PROFILE_V:
+        return None
+    cands, remap = [], {}
+    for i, s in enumerate(p.get("sources") if isinstance(p.get("sources"), list) else []):
+        url = safe_url(s.get("url")) if isinstance(s, dict) else ""
+        if url and not blocked_url(url):
+            remap[i] = len(cands)
+            cands.append({"url": url, "label": _source_label(s, url)})
+    head = {"name": clean_text(p.get("name"), 120), "at": clean_text(p.get("at"), 40),
+            "confidence": p.get("confidence") if p.get("confidence") in ("high", "medium") else ""}
+    if kind == "org":
+        head["domain"] = str(p.get("domain") or "").lower() if DOMAIN_RE.match(str(p.get("domain") or "").lower()) else ""
+    return _profile_finish(kind, _profile_body(p, kind, lambda c: remap.get(c) if isinstance(c, int) and not isinstance(c, bool) else None),
+                           cands, head)
+
+
+def profile_for_ai(p):
+    """A profile as plain sentences for a brief or an answer (Claude doesn't need the page addresses)."""
+    if not isinstance(p, dict):
+        return None
+    out = {"from": "MOAB's web research (public pages)", "name": p.get("name", "")}
+    if p.get("summary"):
+        out["summary"] = p["summary"]["text"]
+    for k in ("now", "education", "work", "what", "tech", "forCall"):
+        if p.get(k):
+            out[k] = [e["text"] for e in p[k]]
+    if p.get("past"):
+        out["past"] = [{"role": e["role"], "org": e["org"], "when": e["when"], "points": [x["text"] for x in e["points"]]} for e in p["past"]]
+    if p.get("facts"):
+        out["facts"] = {e["label"]: e["value"] for e in p["facts"]}
+    if p.get("news"):
+        out["news"] = [(e["when"] + ": " if e.get("when") else "") + e["text"] for e in p["news"]]
+    return out
 
 
 def research_status(email, rec, m):
@@ -2036,7 +2619,7 @@ def research_status(email, rec, m):
     if rec.get("lookup") == "done":
         return "done", ""
     if rec.get("lookup") == "unknown":
-        return "unknown", "MOAB looked for public work information about them and found none."
+        return "unknown", searched_note(rec, "work information about them")
     why = skip_reason(email, m, rec).strip()
     return ("notfound" if why.startswith("Can't find") else "skipped"), why
 
@@ -2052,7 +2635,8 @@ def research_view(email, rec, m):
         "confidence": str(rec.get("confidence") or ""), "title": str(rec.get("title") or ""), "team": str(rec.get("team") or ""),
         "seniority": str(rec.get("seniority") or ""), "tenure": str(rec.get("tenure") or ""),
         "relationship": str(rec.get("relationship") or ""), "sources": srcs[:3], "local": dict(m.get("local") or {}),
-        "nameFrom": str(m.get("nameFrom") or ""), "nameUsed": str(m.get("name") or "") if m.get("nameFrom") == "email" else "",
+        "nameFrom": str(m.get("nameFrom") or ""), "nameUsed": str(m.get("name") or "") if m.get("nameFrom") in ("email", "event") else "",
+        "profile": profile_view(rec.get("profile"), "person"),  # contract A, or None
     }
 
 
@@ -2061,15 +2645,28 @@ def research_fill(live, records, meta):
     for email, m in meta.items():
         if email in live["people"]:
             live["people"][email]["research"] = research_view(email, people.get(email) or {}, m)
+    # Company research: live.orgs[domain] = {status, note, domain, company, foundAt, profile}, and the profile on the company row
+    # the calls use (live.companies[name].profile; a row only research made is marked researchOnly).
+    orgs, rec_orgs = {}, records.get("orgs") or {}
+    for d, om in org_meta(meta).items():
+        view = orgs[d] = org_research_view(d, om, rec_orgs.get(d) or {})
+        if view["profile"] and om["name"]:
+            row = live["companies"].get(om["name"])
+            if not isinstance(row, dict):
+                row = live["companies"][om["name"]] = {"engineers": None, "status": "Prospect", "history": [], "customer": False, "notes": "",
+                                                       "domain": d, "researchOnly": True}
+            row["profile"] = view["profile"]
+    live["orgs"] = orgs
 
 
 def research_body():
-    """GET /api/research: statuses for everyone on your upcoming calls."""
+    """GET /api/research: statuses for everyone on your upcoming calls, and for their companies (orgs, by domain)."""
     with RQ_LOCK:
         meta = dict(RQ["meta"])
     records = load_records()
-    people = records.get("people") or {}
+    people, rec_orgs = records.get("people") or {}, records.get("orgs") or {}
     return {"claude": claude_on(), "people": {e: research_view(e, people.get(e) or {}, m) for e, m in meta.items()},
+            "orgs": {d: org_research_view(d, om, rec_orgs.get(d) or {}) for d, om in org_meta(meta).items()},
             "mentions": mention_statuses(records)}
 
 
@@ -3711,7 +4308,7 @@ def clean_org_relation(obj, seen):
     detail = clean_text(obj.get("detail"), 80)
     if "@" in detail or PHONE_RE.search(detail):
         detail = ""
-    srcs = clean_evidence(obj.get("sources"), srcs)
+    srcs = clean_evidence(obj.get("sources"), srcs, seen)
     out.update(type=obj["relation"], detail=detail, sources=srcs, confidence=obj["confidence"],
                explanation=clean_explanation(obj.get("explanation"), obj.get("sources"), srcs), since=clean_since(obj.get("since"), obj.get("sources"), srcs))
     return out
@@ -3753,6 +4350,8 @@ def do_org_lookup(job, now=None):
     """The research worker's job for one company: how is it related to the call's company? Sourced or unknown."""
     if not source_on("web"):  # turned off while it waited: nothing goes to the web
         return update_org(job["callId"], job["id"], lambda it, _r: it.update(status="nokey", note=WEB_OFF_NOTE) if it.get("status") == "pending" else None)
+    if held_back(job, org=True):
+        return None
     key = ("org", norm_org(job.get("company")), norm_org(job.get("name")))
     rel = _cache_get(key, job.get("forced"))
     if rel is None:
@@ -3857,8 +4456,9 @@ def connection_id(call_id, kind, key):
 
 # ---- explaining a connection: what it is, backed by sources ----
 # Claude's answer carries 1 to 3 plain sentences, each citing its sources by number, and per source a short quote (25 words at
-# most) and the page's date. A sentence whose sources were all dropped (blocked, never in the search results) is dropped too,
-# so the card never says more than the sources do; with no sentence left it shows only the relation type.
+# most, shown only when the search's own citations of that page hold those words) and the page's date (the search's, never
+# Claude's). A sentence whose sources were all dropped (blocked, never in the search results) is dropped too, so the card never
+# says more than the sources do; with no sentence left it shows only the relation type.
 
 EVIDENCE_WORDS = 25
 PAGE_DATE_RE = re.compile(r"^\d{4}(?:-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?)?$")
@@ -3873,8 +4473,18 @@ def _evidence_quote(v):
     return t if len(w) <= EVIDENCE_WORDS else " ".join(w[:EVIDENCE_WORDS]) + "…"
 
 
-def clean_evidence(raw_sources, kept):
-    """The kept sources ({url, label}) with the date and the short quote Claude gave for each (from its own sources list)."""
+_QUOTE_FOLD = str.maketrans({"“": '"', "”": '"', "‘": "'", "’": "'", "…": " "})
+
+
+def _quote_words(t):
+    """Text to compare word for word: curly quotes made straight, case, spacing and the quotation marks or dots at either end left out."""
+    return " ".join(str(t or "").translate(_QUOTE_FOLD).split()).lower().strip("\"'. ")
+
+
+def clean_evidence(raw_sources, kept, seen=None):
+    """The kept sources ({url, label}) with a short quote and the page's date, neither only on Claude's word: the quote Claude gave
+    (from its own sources list) is kept only when the search's own citations of that page hold those words (seen, from
+    run_search), and the date is the one the search gave for the page."""
     by = {}
     for s in raw_sources if isinstance(raw_sources, list) else []:
         u = safe_url(s.get("url")) if isinstance(s, dict) else ""
@@ -3883,8 +4493,12 @@ def clean_evidence(raw_sources, kept):
     out = []
     for k in kept:
         raw = by.get(url_key(k["url"])) or {}
-        d = clean_text(raw.get("date"), 10)
-        out.append({"url": k["url"], "label": k.get("label") or "", "date": d if PAGE_DATE_RE.match(d) else "", "quote": _evidence_quote(raw.get("quote"))})
+        page = (seen.get(url_key(k["url"])) if isinstance(seen, dict) else None) or {}
+        q = _evidence_quote(raw.get("quote"))
+        if not _quote_words(q) or not any(_quote_words(q) in _quote_words(c) for c in page.get("cited") or []):
+            q = ""
+        d = str(page.get("age") or "")
+        out.append({"url": k["url"], "label": k.get("label") or "", "date": d if PAGE_DATE_RE.match(d) else "", "quote": q})
     return out
 
 
@@ -3924,22 +4538,31 @@ def clean_since(since, raw_sources, kept):
 
 
 def _evidence_view(srcs):
-    out = []
-    for s in srcs or []:
+    """(the sources shown, at most 3; {stored index: shown index}). A source dropped now (a site you blocked in Settings since)
+    moves the ones after it up, so the map is what keeps each sentence on the source it really cites."""
+    out, remap = [], {}
+    for i, s in enumerate(srcs or []):
         u = safe_url(s.get("url")) if isinstance(s, dict) else ""
         if not u or blocked_url(u):
             continue
         d = clean_text(s.get("date"), 10)
+        remap[i] = len(out)
         out.append({"url": u, "label": clean_text(s.get("label"), 120) or urllib.parse.urlsplit(u).hostname,
                     "date": d if PAGE_DATE_RE.match(d) else "", "quote": _evidence_quote(s.get("quote"))})
-    return out[:3]
+        if len(out) == 3:
+            break
+    return out, remap
 
 
-def _explanation_view(expl, n):
-    """Sentences as stored, checked again: every one must still cite one of the n sources shown."""
+def _explanation_view(expl, remap):
+    """Sentences as stored, checked again: each one's sources (stored indices) are moved to where they are shown (remap, from
+    _evidence_view); a sentence none of whose sources is shown any more is dropped."""
     out = []
     for e in expl if isinstance(expl, list) else []:
-        refs = [i for i in (e.get("sources") or []) if isinstance(i, int) and not isinstance(i, bool) and 0 <= i < n] if isinstance(e, dict) else []
+        refs = []
+        for i in (e.get("sources") or []) if isinstance(e, dict) else []:
+            if isinstance(i, int) and not isinstance(i, bool) and i in remap and remap[i] not in refs:
+                refs.append(remap[i])
         text = clean_text(e.get("text"), 300) if isinstance(e, dict) else ""
         if text and refs:
             out.append({"text": text, "sources": refs})
@@ -3958,21 +4581,21 @@ def explain_view(kind, it, block):
     if kind == "company":
         rel = it.get("relation") if isinstance(it.get("relation"), dict) else {}
         t = rel.get("type") if rel.get("type") in ORG_RELATIONS else "unknown"
-        ev = _evidence_view(rel.get("sources"))
+        ev, remap = _evidence_view(rel.get("sources"))
         said = {"text": clean_text(rel.get("said"), 200), "speaker": clean_text(rel.get("speaker"), 80), "time": clean_text(rel.get("time"), 12)} \
             if rel.get("source") == "said" and rel.get("said") else None
         since = rel.get("since") if isinstance(rel.get("since"), dict) else None
-        since = _explanation_view([since], len(ev))[0] if since and _explanation_view([since], len(ev)) else None
+        since = (_explanation_view([since], remap) or [None])[0] if since else None
         how = "Said on the call" if rel.get("source") == "said" else "Found on the web" if ev else ""
         return {"kind": "company", "name": clean_text(it.get("name"), 120), "type": t, "typeLabel": ORG_RELATIONS.get(t, "Unknown"),
                 "label": org_edge_label(rel) if rel else "mentioned", "detail": clean_text(rel.get("detail"), 80) if rel.get("detail") != "former" else "former",
-                "explanation": _explanation_view(rel.get("explanation"), len(ev)), "since": since, "evidence": ev, "said": said,
+                "explanation": _explanation_view(rel.get("explanation"), remap), "since": since, "evidence": ev, "said": said,
                 "mention": mention, "found": dict(found, how=how), "confidence": rel.get("confidence") if rel.get("confidence") in ("high", "medium") else ""}
     p, likely = it.get("person"), False
     if not isinstance(p, dict) and it.get("status") == "pick" and it.get("candidates"):
         p, likely = it["candidates"][0], True
     p = p if isinstance(p, dict) else {}
-    ev = _evidence_view(p.get("sources"))
+    ev, remap = _evidence_view(p.get("sources"))
     sd = it.get("said") if isinstance(it.get("said"), dict) else {}
     said = {"text": clean_text(sd.get("said"), 200), "speaker": clean_text(sd.get("speaker"), 80), "time": clean_text(sd.get("time"), 12)} if sd.get("said") else None
     rel = str(p.get("relationship") or sd.get("relationship") or "")
@@ -3980,13 +4603,14 @@ def explain_view(kind, it, block):
     return {"kind": "person", "name": clean_text(p.get("name") or it.get("name") or it.get("role"), 100), "title": clean_text(p.get("title"), 120),
             "type": rel if rel in RELATIONSHIPS else "", "typeLabel": RELATIONSHIPS.get(rel, "") if rel != "unknown" else "",
             "label": clean_text(sd.get("label"), 80) or clean_text(it.get("role"), 80), "team": clean_text(p.get("team"), 120),
-            "explanation": _explanation_view(p.get("explanation"), len(ev)), "since": None, "evidence": ev, "said": said, "mention": mention,
+            "explanation": _explanation_view(p.get("explanation"), remap), "since": None, "evidence": ev, "said": said, "mention": mention,
             "found": dict(found, how=how), "confidence": p.get("confidence") if p.get("confidence") in ("high", "medium") else "", "likely": likely}
 
 
 def prune_quotes(r, now=None):
     """Settings > Mentions > keep quotes for N days: a call's sentences (the quote and what was said about them) older than that
-    are dropped, inside the records lock. The mention, its relation and its web sources stay. Returns the call ids changed."""
+    are dropped, inside the records lock, and so is Granola's summary of the call. The mention, its relation and its web sources
+    stay, and the Granola note's title and link. Returns the call ids changed."""
     cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=mention_settings(r)["keepDays"])
     changed = set()
     for cid, block in (r.get("mentions") or {}).items():
@@ -4005,6 +4629,11 @@ def prune_quotes(r, now=None):
                     changed.add(cid)
     for cid in changed:
         sync_connections(r, cid)
+    for cid, g in (r.get("granola") or {}).items():
+        at = parse_dt(g.get("at")) if isinstance(g, dict) else None
+        if at and at <= cutoff and g.get("summary"):
+            g["summary"] = ""
+            changed.add(cid)
     return changed
 
 
@@ -4159,7 +4788,7 @@ def clean_candidates(obj, seen, job):
         if "@" in why or PHONE_RE.search(why):
             why = ""
         names.add(n)
-        ev = clean_evidence(c.get("sources"), r["sources"])
+        ev = clean_evidence(c.get("sources"), r["sources"], seen)
         out.append({"name": name, "title": r["title"], "team": r["team"], "seniority": r["seniority"], "tenure": r["tenure"],
                     "relationship": r["relationship"] if r["relationship"] != "unknown" else "", "confidence": r["confidence"],
                     "sources": ev, "why": why, "from": "Web", "explanation": clean_explanation(c.get("explanation"), c.get("sources"), ev)})
@@ -4226,6 +4855,8 @@ def do_mention_lookup(job, now=None):
     shown most likely first as "Likely, not confirmed" and nothing is saved as a connection until you pick or confirm."""
     if not source_on("web"):  # turned off while it waited: nothing goes to the web
         return update_mention(job["callId"], job["id"], lambda it, _r: it.update(status="nokey", note=WEB_OFF_NOTE) if it.get("status") == "pending" else None)
+    if held_back(job):
+        return None
     role = job.get("role") or ""
     key = ("person", norm_name(job.get("name") or ""), role.lower(), norm_org(job.get("company")))
     cands = _cache_get(key, job.get("forced"))
@@ -4292,6 +4923,19 @@ def blocked_status(blocker, org=False):
     return "unknown" if org else "notfound"
 
 
+def held_back(job, org=False):
+    """For the research worker: automatic look-up was turned off while a lookup found during the call (notes as you type,
+    Meetily) waited. It shows "Not looked up" instead of going to the web; Look up on the web (forced) still goes. True when held."""
+    if job.get("forced") or mention_settings()["autoLookup"]:
+        return False
+    block = (load_records().get("mentions") or {}).get(job["callId"]) or {}
+    it = next((x for x in block.get("orgs" if org else "items") or [] if isinstance(x, dict) and x.get("id") == job["id"]), None)
+    if not it or it.get("source") not in AUTO_SOURCES:
+        return False
+    (update_org if org else update_mention)(job["callId"], job["id"], lambda x, _r: x.update(status="nokey", note=AUTO_OFF_NOTE) if x.get("status") == "pending" else None)
+    return True
+
+
 def mention_status(call_id, it):
     """(status, note): pending, found, known, pick, notfound, error, nokey."""
     status, note = it.get("status") or "notfound", it.get("note") or ""
@@ -4307,13 +4951,13 @@ def mention_status(call_id, it):
 def _person_view(p):
     if not isinstance(p, dict):
         return None
-    srcs = _evidence_view(p.get("sources"))
+    srcs, remap = _evidence_view(p.get("sources"))
     rel = str(p.get("relationship") or "")
     return {"name": clean_text(p.get("name"), 100), "title": clean_text(p.get("title"), 120), "team": clean_text(p.get("team"), 120),
             "seniority": clean_text(p.get("seniority"), 40), "tenure": clean_text(p.get("tenure"), 60),
             "relationship": rel if rel in RELATIONSHIPS else "", "confidence": str(p.get("confidence") or "") if p.get("confidence") in ("high", "medium") else "",
             "why": clean_text(p.get("why"), 200), "from": clean_text(p.get("from"), 40), "sources": srcs,
-            "explanation": _explanation_view(p.get("explanation"), len(srcs))}
+            "explanation": _explanation_view(p.get("explanation"), remap)}
 
 
 def _said_view(said):
@@ -4368,7 +5012,7 @@ def org_view(call_id, it, conns=None, block=None):
     """One company mentioned on the call, with how it relates to the call's company (said on the call, found on the web, or unknown)."""
     status, note = org_status(call_id, it)
     rel = it.get("relation") if isinstance(it.get("relation"), dict) else None
-    srcs = _evidence_view((rel or {}).get("sources"))
+    srcs, remap = _evidence_view((rel or {}).get("sources"))
     out = {"id": it["id"], "kind": "company", "name": clean_text(it.get("name"), 120), "domain": str(it.get("domain") or ""),
            "quote": {k: str((it.get("quote") or {}).get(k) or "") for k in ("text", "speaker", "time")}, "count": int(it.get("count") or 1),
            "source": str(it.get("source") or ""), "status": status, "note": note, "removed": bool(it.get("removed")),
@@ -4377,7 +5021,7 @@ def org_view(call_id, it, conns=None, block=None):
                                              "source": "said" if rel.get("source") == "said" else "web", "sources": srcs[:3],
                                              "confidence": rel.get("confidence") if rel.get("confidence") in ("high", "medium") else "",
                                              "speaker": clean_text(rel.get("speaker"), 80), "time": clean_text(rel.get("time"), 12),
-                                             "explanation": _explanation_view(rel.get("explanation"), len(srcs[:3]))},
+                                             "explanation": _explanation_view(rel.get("explanation"), remap)},
            "explain": explain_view("company", it, block or {})}
     if conns is not None:
         out["connected"] = connection_id(call_id, "company", it.get("key") or it["id"]) in conns
@@ -4394,16 +5038,17 @@ def mentions_body(call_id, met=None, requeue=True):
     records = load_records()
     block = (records.get("mentions") or {}).get(call_id) or {}
     items = block.get("items") or []
-    if requeue and not lookup_blocker(block):
+    blockers = {auto: lookup_blocker(block, auto) for auto in (False, True)} if requeue else {}
+    if requeue and not blockers[False]:
         for it in items:
-            if it.get("status") == "pending":
+            if it.get("status") == "pending" and not blockers[it.get("source") in AUTO_SOURCES]:
                 key = mention_key(call_id, it["id"])
                 with RQ_LOCK:
                     waiting = key in RQ["pending"] or key in RQ["running"] or key in RQ["errors"]
                 if not waiting:
                     queue_mention(call_id, block, it)
         for it in block.get("orgs") or []:
-            if it.get("status") == "pending":
+            if it.get("status") == "pending" and not blockers[it.get("source") in AUTO_SOURCES]:
                 key = "org:" + call_id + ":" + it["id"]
                 with RQ_LOCK:
                     waiting = key in RQ["pending"] or key in RQ["running"] or key in RQ["errors"]
@@ -4418,18 +5063,19 @@ def mentions_body(call_id, met=None, requeue=True):
 
 
 def settle_blocked(call_id):
-    """Lookups left "Looking up…" that can't run now (web research turned off, the key removed) and aren't queued show
-    "Not looked up" instead, so nothing spins for ever. They can be looked up again once it is allowed."""
+    """Lookups left "Looking up…" that can't run now (web research turned off, the key removed, or automatic look-up turned off
+    for one found during the call) and aren't queued show "Not looked up" instead, so nothing spins for ever. They can be looked
+    up again once it is allowed."""
     block = (load_records().get("mentions") or {}).get(call_id) or {}
-    blocker = lookup_blocker(block) if block else ""
-    if not blocker:
+    blockers = {auto: lookup_blocker(block, auto) for auto in (False, True)} if block else {}
+    if not blockers.get(True):  # automatic look-up adds a reason, never takes one away: nothing is blocked
         return 0
     with RQ_LOCK:
         busy = RQ["pending"] | RQ["running"]
-    todo = [(k, it["id"]) for k in ("items", "orgs") for it in block.get(k) or []
-            if isinstance(it, dict) and it.get("status") == "pending"
+    todo = [(k, it["id"], blockers[it.get("source") in AUTO_SOURCES]) for k in ("items", "orgs") for it in block.get(k) or []
+            if isinstance(it, dict) and it.get("status") == "pending" and blockers[it.get("source") in AUTO_SOURCES]
             and (mention_key(call_id, it["id"]) if k == "items" else "org:" + call_id + ":" + it["id"]) not in busy]
-    for k, mid in todo:
+    for k, mid, blocker in todo:
         fn = update_mention if k == "items" else update_org
         fn(call_id, mid, lambda it, _r: it.update(status=blocked_status(blocker, k == "orgs"), note=blocker) if it.get("status") == "pending" else None)
     return len(todo)
@@ -5125,10 +5771,10 @@ MEETILY = {}
 
 def meetily_reset(keep_pin=True):
     with MEETILY_LOCK:
-        pin = (MEETILY.get("pinned", ""), MEETILY.get("pinnedAt", 0.0)) if keep_pin else ("", 0.0)
+        pin = (MEETILY.get("pinned", ""), MEETILY.get("pinnedAt", 0.0), MEETILY.get("pinnedFolder", "")) if keep_pin else ("", 0.0, "")
         MEETILY.clear()
         MEETILY.update(folder="", mtime=None, seqs={}, lines=[], callId="", lastLineAt=0.0, recording=False, error="",
-                       pinned=pin[0], pinnedAt=pin[1], name="")
+                       pinned=pin[0], pinnedAt=pin[1], pinnedFolder=pin[2], name="")
 
 
 meetily_reset(False)
@@ -5224,12 +5870,12 @@ def meetily_segments(folder):
 
 
 def meetily_call_for(meta, now=None):
-    """The calendar call this recording belongs to: the call picked in the panel, else the call running when Meetily started
-    (from 15 minutes before it to its end). "" when none fits."""
+    """The calendar call this recording belongs to: the call picked in the panel for this recording, else the call running when
+    Meetily started (from 15 minutes before it to its end). "" when none fits."""
     now = now or datetime.now(timezone.utc)
     with MEETILY_LOCK:
-        pin, pin_at = MEETILY.get("pinned"), MEETILY.get("pinnedAt") or 0.0
-    if pin and _time.time() - pin_at < MEETILY_PIN_HOURS * 3600:
+        pin, pin_at, same = MEETILY.get("pinned"), MEETILY.get("pinnedAt") or 0.0, MEETILY.get("pinnedFolder") == MEETILY.get("folder")
+    if pin and same and _time.time() - pin_at < MEETILY_PIN_HOURS * 3600:
         return pin
     if not token_info():
         return ""
@@ -5286,7 +5932,7 @@ def meetily_step(now=None):
         return 0
     n = _meetily_read(folder, meta, final, now)
     if final:
-        meetily_reset()
+        meetily_reset(False)  # a call picked for this recording ends with it
     return n
 
 
@@ -5296,10 +5942,10 @@ def _meetily_read(folder, meta, final, now):
     except OSError:
         mtime = None
     with MEETILY_LOCK:
-        if MEETILY["folder"] != str(folder):
-            pin = (MEETILY["pinned"], MEETILY["pinnedAt"])
+        if MEETILY["folder"] != str(folder):  # another recording: a call picked for an earlier one doesn't carry over
+            pin = (MEETILY["pinned"], MEETILY["pinnedAt"], MEETILY["pinnedFolder"]) if MEETILY["pinnedFolder"] == str(folder) else ("", 0.0, "")
             MEETILY.update(folder=str(folder), mtime=None, seqs={}, lines=[], callId="", lastLineAt=0.0, error="",
-                           name=clean_text((meta or {}).get("meeting_name"), 120), pinned=pin[0], pinnedAt=pin[1])
+                           name=clean_text((meta or {}).get("meeting_name"), 120), pinned=pin[0], pinnedAt=pin[1], pinnedFolder=pin[2])
         MEETILY["recording"] = not final
         if mtime == MEETILY["mtime"] and not final:
             return 0
@@ -5339,14 +5985,15 @@ def meetily_status(call_id=""):
 
 
 def meetily_pick(body):
-    """POST /api/meetily/pick {callId}: the call Meetily's transcript belongs to (picked in the panel); "" lets MOAB match it by time."""
+    """POST /api/meetily/pick {callId}: the call the recording Meetily is making now belongs to (picked in the panel); "" lets MOAB
+    match it by time. The pick holds for that recording only."""
     if not isinstance(body, dict) or set(body) != {"callId"} or not isinstance(body["callId"], str):
         return 400, {"error": "send {callId}"}
     cid = body["callId"]
     if cid and not CALLID_RE.match(cid):
         return 400, {"error": "callId doesn't look right"}
     with MEETILY_LOCK:
-        MEETILY.update(pinned=cid, pinnedAt=_time.time() if cid else 0.0, mtime=None)  # read again for the picked call
+        MEETILY.update(pinned=cid, pinnedAt=_time.time() if cid else 0.0, pinnedFolder=MEETILY["folder"] if cid else "", mtime=None)  # read again for the picked call
     return 200, meetily_status(cid)
 
 
@@ -5377,7 +6024,8 @@ def _z(dt):
 
 def granola_note_for(inv, deadline=None):
     """The Granola note of this calendar call (with its transcript), or None. Matched by the calendar event id, else by the
-    start time and a shared guest (or the same title)."""
+    start time and a shared guest (or the same title), from each note without its transcript: only the matching note's
+    transcript is fetched, never another meeting's."""
     start, end = parse_dt(inv.get("start")), parse_dt(inv.get("end"))
     if not start:
         return None
@@ -5393,26 +6041,32 @@ def granola_note_for(inv, deadline=None):
     best = None
     for n in notes[:8]:
         try:
-            d = _granola_get("/v1/notes/" + n["id"] + "?include=transcript", deadline)
+            d = _granola_get("/v1/notes/" + n["id"], deadline)
         except ApiError as e:
-            if e.status == 413:  # too big to send inline: page it
-                d = _granola_get("/v1/notes/" + n["id"], deadline)
-                d["transcript"] = granola_transcript_pages(n["id"], deadline)
-            elif e.status == 404:
+            if e.status == 404:
                 continue
-            else:
-                raise
+            raise
         ce = d.get("calendar_event") if isinstance(d.get("calendar_event"), dict) else {}
         if ce.get("calendar_event_id") and safe_id(ce["calendar_event_id"]) == re.sub(r"-\d+$", "", inv["id"]):
-            return d
+            best = (-1.0, n["id"], d)
+            break
         st = parse_dt(ce.get("scheduled_start_time"))
         invitees = {str(x.get("email") or "").lower() for x in ce.get("invitees") or [] if isinstance(x, dict)}
         same = (guests & invitees) or norm_name(ce.get("event_title") or d.get("title") or "") == norm_name(inv.get("title") or "")
         if st and abs((st - start).total_seconds()) <= GRANOLA_MATCH and same:
             diff = abs((st - start).total_seconds())
             if not best or diff < best[0]:
-                best = (diff, d)
-    return best[1] if best else None
+                best = (diff, n["id"], d)
+    if not best:
+        return None
+    _diff, nid, d = best
+    try:
+        return _granola_get("/v1/notes/" + nid + "?include=transcript", deadline)
+    except ApiError as e:
+        if e.status != 413:
+            raise
+    d["transcript"] = granola_transcript_pages(nid, deadline)  # too big to send inline: page it
+    return d
 
 
 def granola_transcript_pages(note_id, deadline):
@@ -5468,7 +6122,8 @@ def granola_fetch(call_id, now=None, forced=False):
         n = len(lines)
         del lines
         note.pop("transcript", None)  # the transcript goes no further
-        block, new, go, wait, new_o, unqueue = save_mentions(call_id, ctx, found, "granola", orgs)
+        # read by itself after the call: Settings > Mentions > automatic look-up decides; Read Granola's note is your own action
+        block, new, go, wait, new_o, unqueue = save_mentions(call_id, ctx, found, "granola", orgs, auto=not forced)
         url = safe_url(note.get("web_url"))
         host = (urllib.parse.urlsplit(url).hostname or "") if url else ""
         _granola_save(call_id, {"status": "done", "noteId": str(note.get("id") or ""), "title": clip(note.get("title"), 200),
@@ -5837,6 +6492,18 @@ class Handler(SimpleHTTPRequestHandler):
             if not source_on("web"):
                 return self.send_json(403, {"error": "Web research is off in Settings > Research sources & privacy."})
             return self.send_json(*request_research(body["email"]))
+        if path == "/api/research/org":  # look a company on your calls up again now: the same guards as /api/research
+            if not write_guard_ok(self.headers) or self.headers.get_content_type() != "application/json":
+                return self.send_json(403, {"error": "not allowed"})
+            try:
+                body = self.read_json(2_000)
+            except (ValueError, RecursionError):
+                return self.send_json(400, {"error": "bad request"})
+            if not isinstance(body, dict) or set(body) != {"domain"} or not isinstance(body["domain"], str):
+                return self.send_json(400, {"error": "send {domain}"})
+            if not source_on("web"):
+                return self.send_json(403, {"error": "Web research is off in Settings > Research sources & privacy."})
+            return self.send_json(*request_org_research(body["domain"]))
         if path in ("/api/meetily/pick", "/api/granola/fetch"):
             # Meetily's call and Granola's note: only from this page (X-MOAB + our Origin), JSON only.
             if not write_guard_ok(self.headers) or self.headers.get_content_type() != "application/json":

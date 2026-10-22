@@ -468,12 +468,14 @@ class FakeClaude:
         return r
 
 
-def reply(answer, urls=(), stop="end_turn"):
-    """A Claude response: optional web search results, then the answer text."""
+def reply(answer, urls=(), stop="end_turn", cited=None, ages=None):
+    """A Claude response: optional web search results (ages: url -> the result's page_age), then the answer text (cited: url ->
+    the cited_text of a citation of that page)."""
     content = []
     if urls:
-        content.append(SimpleNamespace(type="web_search_tool_result", content=[SimpleNamespace(type="web_search_result", url=u) for u in urls]))
-    content.append(SimpleNamespace(type="text", text=answer if isinstance(answer, str) else json.dumps(answer), citations=None))
+        content.append(SimpleNamespace(type="web_search_tool_result", content=[SimpleNamespace(type="web_search_result", url=u, page_age=(ages or {}).get(u)) for u in urls]))
+    cites = [SimpleNamespace(type="web_search_result_location", url=u, cited_text=t) for u, t in (cited or {}).items()]
+    content.append(SimpleNamespace(type="text", text=answer if isinstance(answer, str) else json.dumps(answer), citations=cites or None))
     return SimpleNamespace(stop_reason=stop, content=content)
 
 
@@ -538,15 +540,19 @@ class Research(Fresh):
         self.assertEqual(req["model"], "claude-opus-5-5")
         self.assertEqual(req["betas"], ["server-side-fallback-2026-07-01"])
         self.assertEqual(req["fallbacks"], "default")
-        self.assertEqual(req["output_config"], {"effort": "low"})
-        tool = req["tools"][0]
+        self.assertEqual(req["output_config"], {"effort": "medium"})  # deep research (was "low" for the one quick search)
+        self.assertEqual(req["max_tokens"], S.DEEP_MAX_TOKENS)
+        tool, fetch = req["tools"]
         self.assertEqual((tool["type"], tool["name"]), ("web_search_20260209", "web_search"))
-        for d in ("zoominfo.com", "rocketreach.co", "contactout.com", "apollo.io", "lusha.com", "signalhire.com", "seamless.ai", "uplead.com",
-                  "hunter.io", "clearbit.com", "spokeo.com", "whitepages.com", "beenverified.com", "truepeoplesearch.com",
-                  "fastpeoplesearch.com", "peoplefinders.com", "radaris.com", "intelius.com", "pipl.com",
-                  "x.com", "twitter.com", "reddit.com", "peopledatalabs.com", "fullcontact.com", "cyberbackgroundchecks.com"):
-            self.assertIn(d, tool["blocked_domains"])
-        self.assertEqual(len(tool["blocked_domains"]), len(set(tool["blocked_domains"])))  # no duplicates
+        self.assertEqual((fetch["type"], fetch["name"]), ("web_fetch_20260209", "web_fetch"))
+        self.assertEqual((tool["max_uses"], fetch["max_uses"]), (S.DEEP_SEARCHES, S.DEEP_FETCHES))
+        for t in (tool, fetch):  # blocked in BOTH tools
+            for d in ("zoominfo.com", "rocketreach.co", "contactout.com", "apollo.io", "lusha.com", "signalhire.com", "seamless.ai", "uplead.com",
+                      "hunter.io", "clearbit.com", "spokeo.com", "whitepages.com", "beenverified.com", "truepeoplesearch.com",
+                      "fastpeoplesearch.com", "peoplefinders.com", "radaris.com", "intelius.com", "pipl.com",
+                      "x.com", "twitter.com", "reddit.com", "peopledatalabs.com", "fullcontact.com", "cyberbackgroundchecks.com"):
+                self.assertIn(d, t["blocked_domains"])
+            self.assertEqual(len(t["blocked_domains"]), len(set(t["blocked_domains"])))  # no duplicates
         self.assertTrue(S.blocked_url("https://x.com/priyaraman"))
         self.assertFalse(S.blocked_url("https://box.com/x"))
         # the code refuses to send a name that is really the address
@@ -556,6 +562,17 @@ class Research(Fresh):
             S.research_request("Priya Raman priya.raman@northwind-freight.com", "Northwind", "northwind-freight.com", "priya.raman@northwind-freight.com")
         with self.assertRaises(S.ResearchError):
             S.research_request("Sam Lee", "Gmail", "gmail.com", "sam@gmail.com")
+
+    def test_a_guest_queued_before_web_research_is_turned_off_is_never_sent(self):
+        f = self.fake(reply(FOUND, FOUND_URLS))
+        queued, meta = self.queue([att("priya.raman@northwind-freight.com", "Priya Raman")])
+        self.assertTrue(queued)
+        S.save_settings({"research": {"web": False}})  # while it waits behind the call's mentions
+        while S.research_step(NOW):
+            pass
+        self.assertEqual(f.calls, [])
+        r = S.research_view("priya.raman@northwind-freight.com", {}, meta["priya.raman@northwind-freight.com"])
+        self.assertEqual((r["status"], r["note"]), ("skipped", S.WEB_OFF_NOTE))
 
     def test_personal_domains_no_name_and_colleagues_are_skipped(self):
         f = self.fake()
@@ -571,6 +588,18 @@ class Research(Fresh):
         self.assertEqual(r["local"]["company"], "")
         self.assertIn("No name on the invite", live["people"]["mbell@northwind-freight.com"]["research"]["note"])
         self.assertTrue(meta["jo.park@spotify.com"]["internal"])
+
+    def test_deep_research_waits_until_the_call_is_a_week_away(self):
+        now = datetime(2026, 10, 21, 18, 0, tzinfo=timezone.utc)
+        self.assertTrue(S.call_soon({"start": "2026-10-22T15:15:00-04:00"}, now))
+        self.assertFalse(S.call_soon({"start": "2026-11-02T15:15:00-05:00"}, now))
+        self.assertTrue(S.call_soon({}, now))  # no known start: don't hold it back
+
+    def test_name_from_the_event_description(self):
+        inv = {"title": "MOAB prototype review", "notes": "Call with Shea Kim from TKS to improve the prototype."}
+        self.assertEqual(S.name_from_event("shea@tks.world", inv), "Shea Kim")
+        self.assertEqual(S.name_from_event("shea@tks.world", {"title": "Review with Shea", "notes": "Shea will review it."}), "")
+        self.assertEqual(S.name_from_event("info@tks.world", inv), "")
 
     def test_first_last_work_address_gives_a_name_and_example_domains_are_not_found(self):
         # No name on the invite, but first.last@company: MOAB uses "Marcus Bell" and says where it came from.
@@ -776,8 +805,9 @@ class Research(Fresh):
         self.assertTrue(self.queue(guest, NOW + timedelta(days=31))[0])  # still nothing known after 30 days: try once more
         S.research_step(NOW + timedelta(days=31))
         self.assertEqual(len(f.calls), 2)
-        # someone with a found title is not looked up again on their own
-        S.merge_research("ann.lee@northwind-freight.com", dict(S.unknown_result(), status="done", title="CTO"), NOW - timedelta(days=90))
+        # someone with a found title is not looked up again on their own (once deep research has run for them; a title found
+        # the old, quick way gets one deep look-up: see DeepResearch.test_an_old_quick_record_is_looked_up_deeply_once)
+        S.merge_research("ann.lee@northwind-freight.com", dict(S.unknown_result(), status="done", title="CTO", profile=None), NOW - timedelta(days=90))
         self.assertFalse(self.queue([att("ann.lee@northwind-freight.com", "Ann Lee")])[0])
 
     def test_claude_errors_and_pause_turn(self):
@@ -810,10 +840,10 @@ class Research(Fresh):
         self.assertEqual(r["status"], "error")
         self.assertIn("didn't finish", r["note"])
         self.assertNotIn("New person", [w["kind"] for w in live["watch"]])
-        f = self.fake(*[reply("", stop="pause_turn") for _ in range(4)])  # still paused after the 3 resends
+        f = self.fake(*[reply("", stop="pause_turn") for _ in range(S.DEEP_RESUMES + 1)])  # still paused after every resend
         self.assertEqual(S.request_research(email)[0], 202)
         S.research_step(NOW)
-        self.assertEqual(len(f.calls), 4)
+        self.assertEqual(len(f.calls), S.DEEP_RESUMES + 1)  # deep research resends a paused search up to DEEP_RESUMES times (was 3)
         self.assertFalse(S.records_path().exists())
         self.assertEqual(self.build([att(email, "Priya Raman")])[0]["people"][email]["research"]["status"], "error")
 
@@ -847,6 +877,341 @@ class Research(Fresh):
                 break
             time.sleep(0.02)
         self.assertEqual(S.research_body()["people"]["priya.raman@northwind-freight.com"]["status"], "done")
+
+
+# ---------------------------------------------------------------- deep research: people and companies ----------------------------------------------------------------
+
+def deep_reply(answer, searched=(), fetched=(), asked=None, failed=(), stop="end_turn", container=None):
+    """A deep-research response: search results, pages web fetch opened (asked: url -> the address Claude asked for), fetches that
+    failed, a code run's output (dynamic filtering: its printed address must not count), then the answer."""
+    content = []
+    if searched:
+        content.append(SimpleNamespace(type="web_search_tool_result", content=[SimpleNamespace(type="web_search_result", url=u, page_age=None) for u in searched]))
+    for i, u in enumerate(list(fetched) + list(failed)):
+        content.append(SimpleNamespace(type="server_tool_use", id="srvtoolu_%d" % i, name="web_fetch", input={"url": (asked or {}).get(u, u)}))
+        ok = SimpleNamespace(type="web_fetch_result", url=u, retrieved_at="2026-10-20T11:00:00Z",
+                             content=SimpleNamespace(type="document", source=SimpleNamespace(type="text", media_type="text/plain", data="page text"), title="Page"))
+        content.append(SimpleNamespace(type="web_fetch_tool_result", tool_use_id="srvtoolu_%d" % i,
+                                       content=ok if u in fetched else SimpleNamespace(type="web_fetch_tool_result_error", error_code="url_not_accessible")))
+    content.append(SimpleNamespace(type="bash_code_execution_tool_result", tool_use_id="srvtoolu_x",
+                                   content=SimpleNamespace(type="bash_code_execution_result", stdout="https://printed-by-code.example/x", stderr="", return_code=0)))
+    content.append(SimpleNamespace(type="text", text=answer if isinstance(answer, str) else json.dumps(answer), citations=None))
+    return SimpleNamespace(stop_reason=stop, content=content, container=container)
+
+
+TKS_TEAM, SHEA_PROFILE, SHEA_TALK = "https://tks.world/team", "https://www.linkedin.com/in/shea-tough", "https://events.example.org/talks/shea"
+SHEA = {
+    "found": True, "confidence": "high", "title": "Director, Program Success", "team": "Program Success", "seniority": "director",
+    "tenure": "", "relationship": "employee",
+    "sources": [
+        {"url": TKS_TEAM, "label": "TKS team page", "supports": ["title", "team", "relationship"]},   # 1: in the search results
+        {"url": SHEA_PROFILE, "label": "Professional profile", "supports": ["seniority"]},       # 2: opened by web fetch
+        {"url": "https://never-seen.example.com/bio", "label": "Made up", "supports": []},       # 3: never returned
+        {"url": "https://www.zoominfo.com/p/shea-tough", "label": "ZoomInfo", "supports": []},   # 4: a blocked site
+        {"url": SHEA_TALK, "label": "Summit talk", "supports": []}],                             # 5: in the search results
+    "summary": {"text": "Shea Tough leads Program Success at The Knowledge Society.", "sources": [1]},
+    "now": [{"text": "Runs the team that supports students through TKS programs.", "sources": [1, 2]},
+            {"text": "Owns partner outcomes.", "sources": [3]},
+            {"text": "Has a ZoomInfo profile.", "sources": [4]},
+            {"text": "Reach Shea at shea@tks.world.", "sources": [1]},
+            {"text": "Call Shea on +1 416 555 0100.", "sources": [1]},
+            {"text": "Shea is married with two kids.", "sources": [1]},
+            {"text": "Lives in Toronto.", "sources": [1]},
+            {"text": "No source for this one.", "sources": []},
+            "A bare sentence."],
+    "past": [{"role": "Program Manager", "org": "Shopify", "when": "2018 - 2021", "sources": [2],
+              "points": [{"text": "Ran the 2019 - 2021 intern program.", "sources": [2]}, {"text": "Unsourced.", "sources": []}]},
+             {"role": "Coordinator", "org": "Made Up Inc", "when": "", "sources": [3], "points": [{"text": "Never seen.", "sources": [3]}]},
+             {"role": "Analyst", "org": "Acme", "when": "2016 - 2018", "sources": [], "points": [{"text": "Built the reporting for the youth program.", "sources": [5]}]}],
+    "education": [{"text": "BA, University of Toronto", "sources": [2]}],
+    "work": [{"text": "Spoke about program design at a 2025 education summit.", "sources": [5]}],
+    "forCall": [{"text": "Ask how Program Success tracks student outcomes across programs.", "sources": [1]}],
+}
+TKS_HOME, TKS_ABOUT, TKS_NEWS = "https://tks.world/", "https://tks.world/about", "https://news.example.com/2026/tks-expands"
+TKS_ORG = {
+    "found": True, "confidence": "high", "name": "The Knowledge Society (TKS)",
+    "sources": [{"url": TKS_HOME, "label": "TKS home"}, {"url": TKS_ABOUT, "label": "About TKS"}, {"url": TKS_NEWS, "label": "Example News"},
+                {"url": "https://never-seen.example.com/tks", "label": "Made up"}],
+    "summary": {"text": "The Knowledge Society (TKS) runs innovation programs for teens.", "sources": [1]},
+    "facts": [{"label": "Founded", "value": "2016", "sources": [2]}, {"label": "Headquarters", "value": "Toronto", "sources": [2]},
+              {"label": "Size", "value": "500 staff", "sources": [4]}],
+    "what": [{"text": "Runs year-long programs on emerging technology for students aged 13 to 17.", "sources": [1, 2]},
+             {"text": "Email hello@tks.world to apply.", "sources": [1]}],
+    "news": [{"text": "Opened programs in two more cities.", "when": "March 2026", "sources": [3]}],
+    "tech": [],
+    "forCall": [{"text": "Ask how Program Success tracks student outcomes today.", "sources": [1]}],
+}
+
+
+class DeepResearch(Fresh):
+    SHEA_GUEST = [att("shea@tks.world", "Shea Tough")]
+    fake, build, queue = Research.fake, Research.build, Research.queue
+
+    def setUp(self):
+        super().setUp()
+        with S.RQ_LOCK:
+            S.RQ.update(queue=[], pending=set(), running=set(), errors={}, meta={})
+        self.old = (S.research_client, S.RESEARCH_AUTOSTART)
+        S.RESEARCH_AUTOSTART = False
+        os.environ["ANTHROPIC_API_KEY"] = "test-key"
+
+    def tearDown(self):
+        S.research_client, S.RESEARCH_AUTOSTART = self.old
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+
+    def test_deep_result_keeps_sourced_bullets_past_roles_and_education(self):
+        f = self.fake(deep_reply(SHEA, searched=[TKS_TEAM, "https://www.zoominfo.com/p/shea-tough", SHEA_TALK], fetched=[SHEA_PROFILE]))
+        self.assertTrue(self.queue(self.SHEA_GUEST)[0])
+        S.research_step(NOW)
+        self.assertEqual(len(f.calls), 1)
+        rec = S.load_records()["people"]["shea@tks.world"]
+        self.assertEqual((rec["title"], rec["team"], rec["relationship"], rec["seniority"], rec["lookup"]),
+                         ("Director, Program Success", "Program Success", "employee", "director", "done"))  # the quick fields still work
+        self.assertTrue(rec["deepAt"].startswith("2026-10-20T12:00"))
+        self.assertEqual(rec["searched"], 3)  # tks.world, linkedin.com, events.example.org (the blocked site isn't counted)
+        p = rec["profile"]
+        self.assertEqual((p["v"], p["name"], p["confidence"]), (2, "Shea Tough", "high"))
+        self.assertEqual(p["sources"], [{"url": TKS_TEAM, "label": "TKS team page"}, {"url": SHEA_PROFILE, "label": "Professional profile"},
+                                        {"url": SHEA_TALK, "label": "Summit talk"}])
+        self.assertEqual(p["summary"], {"text": "Shea Tough leads Program Success at The Knowledge Society.", "src": [0]})
+        self.assertEqual(p["now"], [{"text": "Runs the team that supports students through TKS programs.", "src": [0, 1]}])
+        self.assertEqual(p["past"], [
+            {"role": "Program Manager", "org": "Shopify", "when": "2018 - 2021", "src": [1], "points": [{"text": "Ran the 2019 - 2021 intern program.", "src": [1]}]},
+            {"role": "Analyst", "org": "Acme", "when": "2016 - 2018", "src": [2], "points": [{"text": "Built the reporting for the youth program.", "src": [2]}]}])
+        self.assertEqual(p["education"], [{"text": "BA, University of Toronto", "src": [1]}])
+        self.assertEqual(p["work"], [{"text": "Spoke about program design at a 2025 education summit.", "src": [2]}])
+        self.assertEqual(p["forCall"], [{"text": "Ask how Program Success tracks student outcomes across programs.", "src": [0]}])
+        saved = json.dumps(p)
+        for gone in ("Owns partner outcomes", "ZoomInfo", "zoominfo", "never-seen", "Made Up Inc", "shea@", "555", "married", "Lives in", "No source", "bare", "Unsourced"):
+            self.assertNotIn(gone, saved)
+        # the page gets the same profile (live.js and GET /api/research), and the alert gives the facts with no homework
+        live, _, _ = self.build(self.SHEA_GUEST)
+        r = live["people"]["shea@tks.world"]["research"]
+        self.assertEqual((r["status"], r["profile"]), ("done", p))
+        self.assertEqual(S.research_body()["people"]["shea@tks.world"]["profile"], p)
+        alert = next(w for w in live["watch"] if w["kind"] == "New person")
+        self.assertEqual(alert["text"], "MOAB looked them up: Director, Program Success, Employee, Program Success. "
+                                        "Shea Tough leads Program Success at The Knowledge Society.")
+        self.assertFalse(S.needs_research(rec, NOW + timedelta(days=60)))  # deep research done and a title found: not again on its own
+
+    def test_unseen_and_blocked_sources_never_back_a_bullet(self):
+        seen = {S.url_key(u): {} for u in (TKS_TEAM, SHEA_TALK, "https://www.zoominfo.com/p/shea-tough")}  # no web fetch this time
+        p = S.clean_profile(SHEA, seen, "person", name="Shea Tough")
+        self.assertEqual([s["url"] for s in p["sources"]], [TKS_TEAM, SHEA_TALK])
+        self.assertEqual(p["past"], [{"role": "Analyst", "org": "Acme", "when": "2016 - 2018", "src": [1],
+                                      "points": [{"text": "Built the reporting for the youth program.", "src": [1]}]}])  # Shopify's page was never opened
+        self.assertEqual(p["education"], [])
+        self.assertEqual(p["now"], [{"text": "Runs the team that supports students through TKS programs.", "src": [0]}])  # its unseen source is left off
+        self.assertIsNone(S.clean_profile(dict(SHEA, sources=SHEA["sources"][2:4]), seen, "person", name="Shea Tough"))  # only unseen or blocked pages
+        for bad in (None, {"found": False}, dict(SHEA, confidence="low"), dict(SHEA, found="yes")):
+            self.assertIsNone(S.clean_profile(bad, seen, "person", name="Shea Tough"))
+        self.assertIsNone(S.clean_profile(SHEA, {}, "person", name="Shea Tough"))  # nothing searched: nothing kept
+        # Claude may cite a page by its address too, never by one it didn't see
+        p2 = S.clean_profile(dict(SHEA, now=[{"text": "Leads a team of 12.", "sources": [TKS_TEAM, "https://never-seen.example.com/bio"]}]), seen, "person")
+        self.assertEqual(p2["now"], [{"text": "Leads a team of 12.", "src": [0]}])
+        # a site blocked later (Settings) drops its bullets from the stored profile, and the rest are renumbered
+        S.save_settings({"research": {"blocked": ["tks.world"]}})
+        v = S.profile_view(p, "person")
+        self.assertEqual([s["url"] for s in v["sources"]], [SHEA_TALK])
+        self.assertEqual((v["summary"], v["now"], v["forCall"]), (None, [], []))
+        self.assertEqual(v["past"][0]["src"], [0])
+        self.assertIsNone(S.profile_view(dict(p, v=1), "person"))
+
+    def test_contact_details_and_personal_life_are_dropped(self):
+        for t in ("Reach her at ann@acme.com", "Call 416-555-0100", "Phone +44 20 7946 0958", "Married to a designer", "Her husband is a doctor",
+                  "Has two kids", "Father of three", "Age 34", "A 34-year-old engineer", "Born in 1990", "Lives in Toronto", "Her religion",
+                  "Political party member", "Her health condition", "Was diagnosed last year", "See https://acme.com/team", "Visit www.acme.com"):
+            self.assertEqual(S._profile_text(t, 260), "", t)
+        for t in ("Ran the 2019 - 2021 intern program.", "Led a team of 40 engineers across 3 offices.", "Worked at Roche Diagnostics.",
+                  "Built tools for a digital health startup.", "Program Manager, 2018-2021"):
+            self.assertEqual(S._profile_text(t, 260), t, t)
+        self.assertEqual(S._profile_text("Runs programs for students aged 13 to 17", 260, personal=False), "Runs programs for students aged 13 to 17")
+        long = S._profile_text("word " * 100, 260)
+        self.assertTrue(len(long) <= 260 and long.endswith("…"))
+
+    def test_web_fetch_results_count_as_seen(self):
+        self.fake(deep_reply("{}", searched=[TKS_TEAM], fetched=[SHEA_PROFILE], asked={SHEA_PROFILE: "https://linkedin.com/in/shea-tough?trk=x"},
+                             failed=["https://broken.example.com/page"]))
+        stop, _, seen = S.run_search(S.research_request("Shea Tough", "Tks", "tks.world", "shea@tks.world"), S.DEEP_BUDGET, S.DEEP_RESUMES)
+        self.assertEqual(stop, "end_turn")
+        self.assertIn(S.url_key(TKS_TEAM), seen)
+        self.assertIn(S.url_key(SHEA_PROFILE), seen)                                    # the page web fetch opened
+        self.assertIn(S.url_key("https://linkedin.com/in/shea-tough?trk=x"), seen)     # and the address Claude asked it to open
+        self.assertNotIn(S.url_key("https://broken.example.com/page"), seen)           # a fetch that failed opened nothing
+        self.assertNotIn(S.url_key("https://printed-by-code.example/x"), seen)         # an address a code run printed isn't a page MOAB saw
+        # a paused deep search is resent with its code container, and the pages of every part count
+        f = self.fake(deep_reply("", searched=[TKS_TEAM], stop="pause_turn", container=SimpleNamespace(id="container_abc")),
+                      deep_reply(SHEA, fetched=[SHEA_PROFILE]))
+        out = S.research_person("Shea Tough", "Tks", "tks.world", "shea@tks.world")
+        self.assertEqual(len(f.calls), 2)
+        self.assertEqual(f.calls[1]["container"], "container_abc")
+        self.assertNotIn("container", f.calls[0])
+        self.assertEqual([s["url"] for s in out["profile"]["sources"]], [TKS_TEAM, SHEA_PROFILE])
+
+    def test_requests_send_no_email_and_block_sites_in_both_tools(self):
+        S.save_settings({"research": {"blocked": ["people-site.com", "zoominfo.com"]}})
+        f = self.fake(deep_reply({"found": False}, searched=[TKS_TEAM]), deep_reply({"found": False}))
+        live, meta, rec = self.build([att("stough@tks.world", "Shea Tough")])
+        S.queue_research(meta, rec, NOW)
+        S.queue_org_research(meta, rec, NOW)
+        while S.research_step(NOW):
+            pass
+        self.assertEqual(len(f.calls), 2)  # the person, then the company
+        for call in f.calls:
+            sent = json.dumps(call, default=str)
+            self.assertNotIn("@", sent)
+            self.assertNotIn("stough", sent.lower())
+            self.assertIn("tks.world", call["messages"][0]["content"])
+            self.assertEqual([t["name"] for t in call["tools"]], ["web_search", "web_fetch"])
+            for t in call["tools"]:
+                self.assertIn("zoominfo.com", t["blocked_domains"])
+                self.assertIn("people-site.com", t["blocked_domains"])
+                self.assertIn("spokeo.com", t["blocked_domains"])
+                self.assertEqual(len(t["blocked_domains"]), len(set(t["blocked_domains"])))
+            self.assertEqual(call["output_config"], {"effort": "medium"})
+        self.assertIn("Shea Tough", f.calls[0]["messages"][0]["content"])
+        self.assertNotIn("Shea", json.dumps(f.calls[1]))  # the company request holds only its name and website
+        self.assertEqual(f.calls[1]["system"], S.ORG_RESEARCH_SYSTEM)
+        with self.assertRaises(S.ResearchError):
+            S.org_research_request("Gmail", "gmail.com")
+        with self.assertRaises(S.ResearchError):
+            S.org_research_request("Example", "example.com")
+        # nothing found: a plain note, never "look it up"
+        r = S.research_view("stough@tks.world", S.load_records()["people"]["stough@tks.world"], meta["stough@tks.world"])
+        self.assertEqual((r["status"], r["profile"]), ("unknown", None))
+        self.assertEqual(r["note"], "MOAB searched 1 site and found no public work information about them.")
+        self.assertEqual(S.searched_note({"searched": 6}, "information about this company"), "MOAB searched 6 sites and found no public information about this company.")
+        self.assertEqual(S.searched_note({}, "work information about them"), "MOAB searched the web and found no public work information about them.")
+
+    def test_an_old_quick_record_is_looked_up_deeply_once(self):
+        email = "shea@tks.world"
+        # Shea, looked up the old quick way two days ago: a title, no profile
+        S.merge_research(email, dict(S.unknown_result(), status="done", title="Director, Program Success", relationship="employee",
+                                     confidence="medium", sources=[{"url": TKS_TEAM, "label": "Team"}]), NOW - timedelta(days=2))
+        self.assertTrue(S.needs_research(S.load_records()["people"][email], NOW))
+        f = self.fake(deep_reply(SHEA, searched=[TKS_TEAM, SHEA_TALK], fetched=[SHEA_PROFILE]))
+        self.assertTrue(self.queue(self.SHEA_GUEST)[0])
+        S.research_step(NOW)
+        self.assertEqual(len(f.calls), 1)
+        rec = S.load_records()["people"][email]
+        self.assertEqual(rec["profile"]["v"], 2)
+        self.assertFalse(self.queue(self.SHEA_GUEST)[0])  # once
+        self.assertFalse(self.queue(self.SHEA_GUEST, NOW + timedelta(days=40))[0])
+        # an old "found nothing" gets one deep look too; a deep "found nothing" waits the 30 days
+        S.merge_research("ann.ko@tks.world", S.unknown_result(), NOW - timedelta(days=2))
+        self.assertTrue(S.needs_research(S.load_records()["people"]["ann.ko@tks.world"], NOW))
+        S.merge_research("ann.ko@tks.world", dict(S.unknown_result(), profile=None, searched=4), NOW - timedelta(days=1))
+        rec = S.load_records()["people"]["ann.ko@tks.world"]
+        self.assertFalse(S.needs_research(rec, NOW))
+        self.assertTrue(S.needs_research(rec, NOW + timedelta(days=31)))
+        # a profile of an older kind is redone, and dropped if the new look finds nothing (so it isn't redone again and again)
+        S.merge_research("bo.ng@tks.world", dict(S.unknown_result(), profile=None), NOW)
+        with S.RECORDS_LOCK:
+            r = S.load_records()
+            r["people"]["bo.ng@tks.world"]["profile"] = {"v": 1, "summary": "old"}
+            S.save_json(S.records_path(), r)
+        self.assertTrue(S.needs_research(S.load_records()["people"]["bo.ng@tks.world"], NOW))
+        S.merge_research("bo.ng@tks.world", dict(S.unknown_result(), profile=None), NOW)
+        self.assertNotIn("profile", S.load_records()["people"]["bo.ng@tks.world"])
+        # a title you typed, or details you confirmed, are never redone on their own
+        S.merge_research("dee.li@tks.world", dict(S.unknown_result(), status="done", title="CTO"), NOW - timedelta(days=2))
+        S.write_records("person", {"email": "dee.li@tks.world", "title": "Chief Technology Officer"})
+        self.assertFalse(S.needs_research(S.load_records()["people"]["dee.li@tks.world"], NOW))
+        S.merge_research("eve.ma@tks.world", dict(S.unknown_result(), status="done", title="CTO"), NOW - timedelta(days=2))
+        S.write_records("person", {"email": "eve.ma@tks.world", "confirm": True})
+        self.assertFalse(S.needs_research(S.load_records()["people"]["eve.ma@tks.world"], NOW))
+
+    def test_company_research_for_outside_companies_only(self):
+        guests = self.SHEA_GUEST + [att("sam.lee@gmail.com", "Sam Lee"), att("ann.lee@example.com", "Ann Lee"), att("jo.park@spotify.com", "Jo Park")]
+        live, meta, rec = self.build(guests)
+        self.assertEqual(live["companyDomains"], {"Tks": "tks.world"})
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        self.assertFalse(S.queue_org_research(meta, rec, NOW))  # no key: nothing queued
+        self.assertEqual(S.research_body()["orgs"]["tks.world"]["note"], S.ORG_NO_KEY_NOTE)
+        os.environ["ANTHROPIC_API_KEY"] = "test-key"
+        S.save_settings({"research": {"web": False}})
+        self.assertFalse(S.queue_org_research(meta, rec, NOW))  # web research off: nothing queued
+        S.save_settings({"research": {"web": True}})
+        f = self.fake(deep_reply(TKS_ORG, searched=[TKS_HOME, TKS_NEWS], fetched=[TKS_ABOUT]))
+        self.assertTrue(S.queue_org_research(meta, rec, NOW))
+        with S.RQ_LOCK:
+            self.assertEqual(S.RQ["queue"], [("co:tks.world", False)])  # not gmail.com, example.com or your own company
+        orgs = S.research_body()["orgs"]
+        self.assertEqual(set(orgs), {"tks.world", "example.com"})
+        self.assertEqual(orgs["tks.world"]["status"], "pending")
+        self.assertEqual(orgs["example.com"]["status"], "skipped")
+        self.assertIn("Can't find this company", orgs["example.com"]["note"])
+        self.assertFalse(S.queue_org_research(meta, rec, NOW))  # one job per domain
+        while S.research_step(NOW):
+            pass
+        self.assertEqual(len(f.calls), 1)
+        self.assertIn("Company: Tks\nCompany website: https://tks.world", f.calls[0]["messages"][0]["content"])
+        o = S.load_records()["orgs"]["tks.world"]
+        self.assertEqual((o["lookup"], o["name"], o["searched"]), ("done", "Tks", 2))
+        p = o["profile"]
+        self.assertEqual((p["v"], p["domain"], p["name"], p["confidence"]), (2, "tks.world", "The Knowledge Society (TKS)", "high"))
+        self.assertEqual([s["url"] for s in p["sources"]], [TKS_HOME, TKS_ABOUT, TKS_NEWS])
+        self.assertEqual(p["summary"], {"text": "The Knowledge Society (TKS) runs innovation programs for teens.", "src": [0]})
+        self.assertEqual(p["facts"], [{"label": "Founded", "value": "2016", "src": [1]}, {"label": "Headquarters", "value": "Toronto", "src": [1]}])
+        self.assertEqual(p["what"], [{"text": "Runs year-long programs on emerging technology for students aged 13 to 17.", "src": [0, 1]}])
+        self.assertEqual(p["news"], [{"text": "Opened programs in two more cities.", "when": "March 2026", "src": [2]}])
+        self.assertEqual((p["tech"], p["forCall"]), ([], [{"text": "Ask how Program Success tracks student outcomes today.", "src": [0]}]))
+        # live.companies[name].profile (a row research made is marked), live.orgs and GET /api/research orgs[domain]
+        live2, meta2, rec2 = self.build(guests)
+        row = live2["companies"]["Tks"]
+        self.assertEqual((row["profile"], row["researchOnly"], row["domain"], row["status"]), (p, True, "tks.world", "Prospect"))
+        self.assertEqual((live2["orgs"]["tks.world"]["status"], live2["orgs"]["tks.world"]["company"]), ("done", "Tks"))
+        self.assertEqual(S.research_body()["orgs"]["tks.world"]["profile"], p)
+        first = next(w for w in live2["watch"] if w["kind"] == "First meeting")
+        self.assertTrue(first["text"].endswith("so this looks like your first talk. The Knowledge Society (TKS) runs innovation programs for teens."))
+        # a company in your records keeps its row; the profile is added to it
+        S.write_records("company", {"name": "Tks", "domain": "tks.world", "status": "New lead", "notes": "Intro from Devursh"})
+        row = self.build(guests)[0]["companies"]["Tks"]
+        self.assertEqual((row["status"], row["notes"], row["profile"]["name"], "researchOnly" in row), ("New lead", "Intro from Devursh", p["name"], False))
+        # 30 days, then once more
+        self.assertFalse(S.queue_org_research(meta2, S.load_records(), NOW + timedelta(days=29)))
+        self.assertTrue(S.queue_org_research(meta2, S.load_records(), NOW + timedelta(days=31)))
+
+    def test_the_brief_and_answers_get_the_research_and_no_homework(self):
+        for phrase in ("what to do before the call", "what to add to MOAB"):
+            self.assertNotIn(phrase, S.SYSTEM + S.ASK_SYSTEM)
+        self.assertIn("never tell the reader to look anything up", S.SYSTEM)
+        self.assertIn("never call a fact automatic or unconfirmed", S.SYSTEM)
+        self.assertIn("End with what to bring up on the call", S.SYSTEM)
+        self.assertIn("Never tell them to look something up or to add it to MOAB's records", S.ASK_SYSTEM)
+        homework = re.compile(r"(?i)\b(?:look (?:them|it|this|that) up|check it|confirm (?:it|their)|verify|add (?:it|them|what you learn) to)\b")
+        self.fake(deep_reply(SHEA, searched=[TKS_TEAM, SHEA_TALK], fetched=[SHEA_PROFILE]), deep_reply(TKS_ORG, searched=[TKS_HOME, TKS_NEWS], fetched=[TKS_ABOUT]))
+        live, meta, rec = self.build(self.SHEA_GUEST)
+        for w in live["watch"]:
+            self.assertIsNone(homework.search(w["text"]), w["text"])
+        S.queue_research(meta, rec, NOW)
+        S.queue_org_research(meta, rec, NOW)
+        while S.research_step(NOW):
+            pass
+        live, _, _ = self.build(self.SHEA_GUEST)
+        for w in live["watch"]:
+            self.assertIsNone(homework.search(w["text"]), w["text"])
+        # the brief's facts carry both profiles (as plain sentences), also when only titles may go to AI
+        facts = {"call": {"title": "Intro", "company": "Tks"}, "people": [{"name": "Shea Tough", "title": "Director, Program Success", "note": "n"}],
+                 "company": None}
+        for share in ("notes", "titles"):
+            S.save_settings({"research": {"aiShare": share}})
+            out = S.brief_facts(facts, S.load_records())
+            self.assertEqual(out["people"][0]["profile"]["summary"], "Shea Tough leads Program Success at The Knowledge Society.")
+            self.assertEqual(out["people"][0]["profile"]["past"][0]["org"], "Shopify")
+            self.assertEqual(out["company"]["profile"]["name"], "The Knowledge Society (TKS)")
+            self.assertEqual(out["company"]["profile"]["facts"], {"Founded": "2016", "Headquarters": "Toronto"})
+            self.assertNotIn("http", json.dumps(out["people"][0]["profile"]))
+        self.assertNotIn("note", out["people"][0])  # titles only: still no notes
+        self.assertNotIn("profile", facts["people"][0])  # the page's copy is untouched
+        other = S.brief_facts({"call": {"company": "Acme"}, "people": [{"name": "Shea Tough"}], "company": None}, S.load_records())
+        self.assertNotIn("profile", other["people"][0])  # another company's call: not this Shea
+        self.assertIsNone(other["company"])
+        # Ask MOAB: this call's people and company carry their research
+        ctx = json.loads(S.ask_context("who is Shea?", live["invites"][0]["id"], live, S.load_records()))
+        self.assertEqual(ctx["thisCall"]["people"][0]["moabResearch"]["summary"], "Shea Tough leads Program Success at The Knowledge Society.")
+        self.assertEqual(ctx["thisCall"]["companyResearch"]["name"], "The Knowledge Society (TKS)")
+        self.assertNotIn("profile", ctx["moabRecords"]["people"]["shea@tks.world"])
 
 
 class ServerBase(Fresh):
@@ -1808,8 +2173,8 @@ TXT_MEET = "Northwind call - Transcript\n00:00:00\n \nPriya Raman: Hi Chris.\n00
 TXT_CHAT = "10:02:33 From Marcus Bell to Everyone: loop in Sam Rivera please\n"
 
 
-def mention_reply(cands, urls=(), stop="end_turn"):
-    return reply({"candidates": cands}, urls, stop)
+def mention_reply(cands, urls=(), stop="end_turn", **kw):
+    return reply({"candidates": cands}, urls, stop, **kw)
 
 
 def cand(name, title="Security Engineering Manager", url="https://northwind-freight.com/team/x", conf="high", why="Leads security at Northwind"):
@@ -3217,6 +3582,66 @@ class MentionSettingsHooks(Fresh):
         self.assertNotIn("vendor for logging", saved)
         self.assertIn("runs security", saved)
 
+    def test_old_quotes_are_dropped_before_the_people_map_and_when_keep_days_is_lowered(self):
+        self.fake()
+        saved = lambda: (Path(TMP) / "records.json").read_text(encoding="utf-8")
+
+        def age(name, days):
+            with S.RECORDS_LOCK:
+                r = S.load_records()
+                for it in r["mentions"]["nw1"]["orgs"]:
+                    if it["name"] == name:
+                        it["at"] = (datetime.now(timezone.utc) - timedelta(days=days)).replace(microsecond=0).isoformat()
+                S.save_json(S.records_path(), r)
+        self.post(VENDOR_T, filename="v.txt")
+        S.save_settings({"mentions": {"keepDays": 7}})
+        age("Brightwave Systems", 30)  # it ages past "keep quotes for" with no new transcript and no GET /api/mentions
+        js = S.live_script()
+        self.assertIn("Brightwave Systems", js)  # still on the People map
+        self.assertNotIn("go through Brightwave", js)
+        self.assertNotIn("vendor for logging", js)
+        self.assertNotIn("go through Brightwave", saved())
+        S.save_settings({"mentions": {"keepDays": 90}})
+        self.post(HARBOR_T, filename="h.txt")
+        age("Harborline Labs", 30)
+        self.assertIn("keeps asking about the pilot", saved())
+        S.save_settings({"mentions": {"keepDays": 7}})  # lowered: dropped at once
+        self.assertNotIn("keeps asking about the pilot", saved())
+
+    def test_automatic_look_up_turned_off_holds_back_lookups_already_queued(self):
+        f = self.fake(mention_reply([]))
+        ctx = S._call_context("nw1", S.load_records(), datetime.now(timezone.utc))[1]
+        found, orgs = S.find_all(S.parse_transcript(HARBOR_T + " Maria Gomez from security called."), ctx)
+        block, new, go, wait, new_o, unqueue = S.save_mentions("nw1", ctx, found, "meetily", orgs, bump=False)  # heard through Meetily
+        S._queue_found("nw1", block, new, go, wait)
+        S.promote_waiting(time.time() + 60)
+        maria = self.by(S.mentions_body("nw1", requeue=False))["Maria Gomez"]
+        oid = next(o["id"] for o in S.mentions_body("nw1", requeue=False)["orgs"] if o["name"] == "Harborline Labs")
+        self.assertEqual(set(self.queued()), {S.mention_key("nw1", maria["id"]), "org:nw1:" + oid})
+        S.save_settings({"mentions": {"autoLookup": False}})  # while they wait
+        while S.research_step():
+            pass
+        self.assertEqual(f.calls, [])
+        body = S.mentions_body("nw1", requeue=False)
+        self.assertEqual({(x["status"], x["note"]) for x in body["items"] + body["orgs"] if x["name"] in ("Maria Gomez", "Harborline Labs")},
+                         {("nokey", S.AUTO_OFF_NOTE)})
+        # left "Looking up…" by a restart: not queued again, and shown as not looked up
+        with S.RECORDS_LOCK:
+            r = S.load_records()
+            for it in r["mentions"]["nw1"]["items"] + r["mentions"]["nw1"]["orgs"]:
+                if it["status"] == "nokey":
+                    it["status"] = "pending"
+            S.save_json(S.records_path(), r)
+        body = S.mentions_body("nw1")
+        self.assertEqual(self.queued(), [])
+        self.assertNotIn("pending", {x["status"] for x in body["items"] + body["orgs"]})
+        # Look up on the web (your own action) still goes
+        self.assertEqual(S.mention_action({"callId": "nw1", "id": maria["id"], "action": "again"})[0], 200)
+        while S.research_step():
+            pass
+        self.assertEqual(len(f.calls), 1)
+        self.assertIn("Maria Gomez", f.calls[0]["messages"][0]["content"])
+
     def test_web_research_off_stops_people_and_company_lookups(self):
         f = self.fake(org_answer("partner"))
         S.save_settings({"research": {"web": False}})
@@ -3276,7 +3701,10 @@ class Explanations(Fresh):
     fake, post, by = MentionFlow.fake, MentionFlow.post, MentionFlow.by
 
     def test_only_sourced_sentences_short_quotes_and_dates_are_kept(self):
-        rel = S.clean_org_relation(HARBOR_EXPLAINED, {S.url_key(u) for u in HARBOR_URLS})
+        # what the search itself showed of each page: the words of its citations and the page's date (page_age, made YYYY-MM-DD)
+        seen = {S.url_key(HARBOR_URLS[0]): {"cited": [HARBOR_EXPLAINED["sources"][0]["quote"]], "age": "2026-08"},
+                S.url_key(HARBOR_URLS[1]): {"cited": ["Harborline and Northwind announced a partnership."], "age": "June 2024"}}
+        rel = S.clean_org_relation(HARBOR_EXPLAINED, seen)
         self.assertEqual([s["url"] for s in rel["sources"]], HARBOR_URLS)  # the unsearched page is dropped
         self.assertEqual([e["text"] for e in rel["explanation"]], [HARBOR_EXPLAINED["explanation"][0]["text"], HARBOR_EXPLAINED["explanation"][1]["text"]])
         self.assertEqual([e["sources"] for e in rel["explanation"]], [[0], [1]])
@@ -3286,6 +3714,8 @@ class Explanations(Fresh):
         self.assertTrue(q0.endswith("…"))
         self.assertEqual(rel["sources"][1]["quote"], "Harborline and Northwind announced a partnership.")  # quote marks trimmed
         self.assertEqual((rel["sources"][0]["date"], rel["sources"][1]["date"]), ("2026-08", ""))  # "June 2024" isn't a date MOAB shows
+        bare = S.clean_org_relation(HARBOR_EXPLAINED, {S.url_key(u) for u in HARBOR_URLS})  # the search showed nothing of the pages
+        self.assertEqual([(s["quote"], s["date"]) for s in bare["sources"]], [("", ""), ("", "")])  # Claude's quote and date alone aren't shown
         none = S.clean_org_relation(dict(HARBOR_EXPLAINED, explanation=[{"text": "x", "sources": [9]}], since={"text": "2020", "sources": [3]}),
                                     {S.url_key(u) for u in HARBOR_URLS})
         self.assertEqual((none["explanation"], none["since"]), ([], None))
@@ -3332,7 +3762,9 @@ class Explanations(Fresh):
         c = cand("Maria Gomez")
         c["explanation"] = [{"text": "Maria Gomez leads security engineering at Northwind Freight.", "sources": [1]}, {"text": "Unsourced.", "sources": [2]}]
         c["sources"][0].update(date="2025-11-02", quote="Maria Gomez, Security Engineering Manager")
-        self.fake(mention_reply([c], ["https://northwind-freight.com/team/x"]), mention_reply([]), mention_reply([]))
+        team = "https://northwind-freight.com/team/x"
+        self.fake(mention_reply([c], [team], cited={team: "Maria Gomez, Security Engineering Manager, leads the team that ..."}, ages={team: "November 2, 2025"}),
+                  mention_reply([]), mention_reply([]))
         self.post()
         while S.research_step():
             pass
@@ -3342,6 +3774,46 @@ class Explanations(Fresh):
         self.assertEqual((x["kind"], x["typeLabel"], x["title"], x["found"]["how"]), ("person", "Employee", "Security Engineering Manager", "Found on the web"))
         self.assertEqual(x["evidence"][0], {"url": "https://northwind-freight.com/team/x", "label": "Team page", "date": "2025-11-02", "quote": "Maria Gomez, Security Engineering Manager"})
         self.assertIn('"explanation"', S.MENTION_SYSTEM)
+
+    def test_quotes_only_in_the_words_the_search_showed_and_dates_only_from_the_search(self):
+        page0 = ("Northwind Freight: our route-planning tools run on Northwind’s live shipment data, updated every few minutes for every lane "
+                 "and every carrier we plan with across North America and Europe.")
+        self.fake(reply(HARBOR_EXPLAINED, HARBOR_URLS, cited={HARBOR_URLS[0]: page0, HARBOR_URLS[1]: "Harborline and Northwind announced a new partnership for tracking."},
+                        ages={HARBOR_URLS[0]: "August 14, 2026", HARBOR_URLS[1]: "3 days ago"}))
+        self.post(HARBOR_T, filename="h.txt")
+        while S.research_step():
+            pass
+        x = next(o for o in S.mentions_body("nw1", requeue=False)["orgs"] if o["name"] == "Harborline Labs")["explain"]
+        self.assertTrue(x["evidence"][0]["quote"].startswith("Northwind Freight: our route-planning tools run on Northwind's live shipment data"))
+        self.assertEqual(x["evidence"][1]["quote"], "")  # "announced a partnership": not the page's words
+        self.assertEqual([e["date"] for e in x["evidence"]], ["2026-08-14", ""])  # the search's dates, never Claude's ("2026-08", "June 2024")
+        self.assertEqual([S.page_day(v) for v in ("April 30, 2025", "Apr 3, 2025", "2025-04-30T10:00:00Z", "3 days ago", "", None)],
+                         ["2025-04-30", "2025-04-03", "2025-04-30", "", "", ""])
+
+    def test_a_site_blocked_later_never_moves_a_sentence_onto_another_source(self):
+        self.fake()
+        self.post(HARBOR_T, filename="h.txt")
+        with S.RECORDS_LOCK:
+            r = S.load_records()
+            o = next(o for o in r["mentions"]["nw1"]["orgs"] if o["name"] == "Harborline Labs")
+            o.update(status="found", relation={"type": "partner", "source": "web", "confidence": "high", "side": "them", "detail": "",
+                                               "sources": [{"url": "https://example-a.com/news", "label": "A news"}, {"url": "https://example-b.com/news", "label": "B news"}],
+                                               "explanation": [{"text": "A news says this.", "sources": [0]}, {"text": "B news says that.", "sources": [1]}],
+                                               "since": {"text": "2023", "sources": [0]}})
+            S.sync_connections(r, "nw1")
+            S.save_json(S.records_path(), r)
+        S.save_settings({"research": {"blocked": ["example-a.com"]}})  # Settings > Research sources: A news is blocked now
+        o = next(o for o in S.mentions_body("nw1", requeue=False)["orgs"] if o["name"] == "Harborline Labs")
+        x = o["explain"]
+        self.assertEqual([e["label"] for e in x["evidence"]], ["B news"])
+        self.assertEqual(x["explanation"], [{"text": "B news says that.", "sources": [0]}])  # B's sentence, cited to B
+        self.assertIsNone(x["since"])  # only A news said when
+        self.assertEqual(o["relation"]["explanation"], x["explanation"])
+        _, edges = S.connections_graph(S.load_records(), {"nw1"})
+        self.assertEqual(next(e for e in edges if e["explain"]["name"] == "Harborline Labs")["explain"], x)
+        p = S._person_view({"name": "Maria Gomez", "sources": [{"url": "https://example-a.com/t"}, {"url": "https://example-b.com/t"}],
+                            "explanation": [{"text": "A says so.", "sources": [0]}, {"text": "B says so.", "sources": [1]}]})
+        self.assertEqual(p["explanation"], [{"text": "B says so.", "sources": [0]}])
 
 
 # ---------------------------------------------------------------- Meetily (fake recording folders) ----------------------------------------------------------------
@@ -3455,6 +3927,36 @@ class MeetilyTests(Fresh):
         self.assertEqual(S.meetily_pick({"callId": "../x"})[0], 400)
         self.assertEqual(S.meetily_pick({"callId": "nw1", "x": 1})[0], 400)
 
+    def end(self, d):
+        meta = json.loads((d / "metadata.json").read_text(encoding="utf-8"))
+        (d / "metadata.json").write_text(json.dumps(dict(meta, status="completed")), encoding="utf-8")
+
+    def nw1(self):
+        return {x["name"] for x in S.load_records()["mentions"]["nw1"]["items"]}
+
+    def test_a_call_picked_for_one_recording_never_carries_over_to_the_next(self):
+        S.save_settings({"research": {"meetily": True}})
+        d1 = self.meeting(name="Ad hoc_2026-10-19_09-00", started=self.now - timedelta(days=2), segs=["Maria Gomez from security."])
+        S.meetily_step()
+        S.meetily_pick({"callId": "nw1"})  # this recording is the Northwind pilot call
+        S.meetily_step()
+        self.assertEqual(self.nw1(), {"Maria Gomez"})
+        self.end(d1)
+        S.meetily_step()
+        d2 = self.meeting(segs=["Tom Hughes from our security team will want the pack."])  # the next one, during the nwlive call
+        S.meetily_step()
+        self.assertEqual((S.meetily_status()["callId"], S.meetily_status()["pinned"]), ("nwlive", ""))
+        self.assertEqual(self.names(), {"Tom Hughes"})
+        self.assertEqual(self.nw1(), {"Maria Gomez"})
+        # the same when the next recording has already started as one picked for another call ends
+        S.meetily_pick({"callId": "nw1"})
+        self.end(d2)
+        self.meeting(name="Northwind again_2026-10-21_15-05", started=self.now - timedelta(minutes=5), segs=["Maria Gomez from our security team will want the pack."])
+        S.meetily_step()
+        self.assertEqual(S.meetily_status()["callId"], "nwlive")
+        self.assertIn("Tom Hughes", self.nw1())  # recording 2 was picked for nw1 and read once more for it as it ended
+        self.assertEqual(self.names(), {"Tom Hughes", "Maria Gomez"})
+
     def test_old_and_crashed_recordings_are_ignored(self):
         S.save_settings({"research": {"meetily": True}})
         self.meeting(name="Old_2026-10-01_10-00", status="completed", segs=["Maria Gomez from security."])
@@ -3533,7 +4035,7 @@ class FakeGranola:
         if q.get("include") == "transcript":
             if n["id"] in self.too_big:
                 return 413, {"message": "TRANSCRIPT_TOO_LARGE"}, {}
-            return 200, n, {}
+            return 200, dict(n), {}  # a fresh copy each time, like real JSON
         return 200, {k: v for k, v in n.items() if k != "transcript"}, {}
 
 
@@ -3608,6 +4110,46 @@ class GranolaTests(Fresh):
         self.assertEqual(st, 200, body)
         self.assertIn("Maria Gomez", {x["name"] for x in body["items"]})
         self.assertTrue(any("/transcript?page_size=100&cursor=2" in c["url"] for c in self.api.calls))
+
+    def test_only_the_matching_notes_transcript_is_fetched(self):
+        os.environ["GRANOLA_API_KEY"] = GRANOLA_KEY
+        S.save_settings({"research": {"granola": True}})
+        self.assertEqual(S.granola_fetch("nwpast")[0], 200)
+        urls = [c["url"] for c in self.api.calls]
+        self.assertFalse([u for u in urls if "not_AAAAAAAAAAAAAA" in u and "transcript" in u], urls)  # the other meeting's transcript is never read
+        self.assertTrue(any(u.endswith("/v1/notes/not_BBBBBBBBBBBBBB?include=transcript") for u in urls), urls)
+
+    def test_the_read_after_the_call_follows_automatic_look_up(self):
+        os.environ["GRANOLA_API_KEY"] = GRANOLA_KEY
+        os.environ["ANTHROPIC_API_KEY"] = "test-key"
+        self.addCleanup(os.environ.pop, "ANTHROPIC_API_KEY", None)
+        S.research_client = lambda: self.fail("automatic look-up is off: nothing goes to Claude")
+        S.save_settings({"research": {"granola": True}, "mentions": {"autoLookup": False}})
+        self.assertEqual(S.granola_step(), 1)  # by itself, after the call
+        maria = next(i for i in S.load_records()["mentions"]["nwpast"]["items"] if i["name"] == "Maria Gomez")
+        self.assertEqual((maria["status"], maria["note"]), ("nokey", S.AUTO_OFF_NOTE))
+        with S.RQ_LOCK:
+            self.assertEqual(S.RQ["queue"], [])
+        with S.RECORDS_LOCK:
+            r = S.load_records()
+            r["mentions"].pop("nwpast")
+            S.save_json(S.records_path(), r)
+        st, body = S.granola_fetch("nwpast", forced=True)  # Read Granola's note: your own action, so it is looked up
+        self.assertEqual(st, 200, body)
+        self.assertEqual(next(i for i in body["items"] if i["name"] == "Maria Gomez")["status"], "pending")
+        with S.RQ_LOCK:
+            self.assertTrue(S.RQ["queue"])
+
+    def test_the_summary_goes_with_old_quotes(self):
+        os.environ["GRANOLA_API_KEY"] = GRANOLA_KEY
+        S.save_settings({"research": {"granola": True}, "mentions": {"keepDays": 1}})
+        self.assertEqual(S.granola_fetch("nwpast")[0], 200)
+        self.assertIn("We talked about the pilot.", (Path(TMP) / "records.json").read_text(encoding="utf-8"))
+        S.prune_old_quotes(datetime.now(timezone.utc) + timedelta(days=30))
+        self.assertNotIn("We talked about the pilot.", (Path(TMP) / "records.json").read_text(encoding="utf-8"))
+        g = S.load_records()["granola"]["nwpast"]
+        self.assertEqual((g["status"], g["title"], g["summary"]), ("done", "Northwind: pilot", ""))  # the note's title and link stay
+        self.assertEqual(S.granola_view(S.load_records(), "nwpast")["summary"], "")
 
     def test_after_the_call_once_and_no_note_tried_again_later(self):
         os.environ["GRANOLA_API_KEY"] = GRANOLA_KEY
@@ -3751,6 +4293,44 @@ class FrameHeaders(ServerBase):
         self.assertNotIn("X-Frame-Options", h)  # it would block the extension
         for p in ("/", "/index.html", "/api/status"):
             self.assertEqual(self.req("GET", p)[2]["Content-Security-Policy"], "frame-ancestors 'self'", p)
+
+
+class DeepResearchRoutes(ServerBase):
+    def test_look_a_company_up_again_has_the_write_guards(self):
+        origin = "http://localhost:%d" % S.PORT
+        old = (S.research_client, S.RESEARCH_AUTOSTART)
+        S.RESEARCH_AUTOSTART = False
+        with S.RQ_LOCK:
+            S.RQ.update(queue=[], pending=set(), running=set(), errors={},
+                        meta={"shea@tks.world": {"name": "Shea Tough", "company": "Tks", "domain": "tks.world", "callId": "u1", "named": True, "internal": False, "local": {}}})
+        ok = {"X-MOAB": "1", "Origin": origin}
+        try:
+            st, txt, _ = self.req("GET", "/api/research")
+            self.assertEqual((st, json.loads(txt)["orgs"]["tks.world"]["note"]), (200, S.ORG_NO_KEY_NOTE))
+            body = {"domain": "tks.world"}
+            self.assertEqual(self.req("POST", "/api/research/org", body)[0], 403)
+            self.assertEqual(self.req("POST", "/api/research/org", body, {"X-MOAB": "1"})[0], 403)
+            self.assertEqual(self.req("POST", "/api/research/org", body, {"X-MOAB": "1", "Origin": "https://evil.example"})[0], 403)
+            self.assertEqual(self.req("POST", "/api/research/org", body, dict(ok, **{"Content-Type": "text/plain"}))[0], 403)
+            st, txt, _ = self.req("POST", "/api/research/org", body, ok)
+            self.assertEqual((st, json.loads(txt)), (503, {"error": "no-key"}))
+            os.environ["ANTHROPIC_API_KEY"] = "test-key"
+            self.assertEqual(self.req("POST", "/api/research/org", {"domain": "not a domain"}, ok)[0], 400)
+            self.assertEqual(self.req("POST", "/api/research/org", {"domain": "tks.world", "x": 1}, ok)[0], 400)
+            self.assertEqual(self.req("POST", "/api/research/org", {"domain": ["tks.world"]}, ok)[0], 400)
+            self.assertEqual(self.req("POST", "/api/research/org", {"domain": "acme.com"}, ok)[0], 404)
+            st, txt, _ = self.req("POST", "/api/research/org", body, ok)
+            self.assertEqual((st, json.loads(txt)["status"]), (202, "pending"))
+            self.assertEqual(json.loads(self.req("GET", "/api/research")[1])["orgs"]["tks.world"]["status"], "pending")
+            with S.RQ_LOCK:
+                self.assertEqual(S.RQ["queue"], [("co:tks.world", True)])
+            S.save_settings({"research": {"web": False}})
+            self.assertEqual(self.req("POST", "/api/research/org", body, ok)[0], 403)
+        finally:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            S.research_client, S.RESEARCH_AUTOSTART = old
+            with S.RQ_LOCK:
+                S.RQ.update(queue=[], pending=set(), running=set(), errors={}, meta={})
 
 
 class ZoomIds(unittest.TestCase):

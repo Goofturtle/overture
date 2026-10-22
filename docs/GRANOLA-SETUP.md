@@ -19,13 +19,16 @@ the call, and shows **From Granola** (the note's title, a link to it and Granola
 ## What MOAB does with it
 
 - Every 5 minutes it looks at calls that ended between 5 minutes and a day ago. For each, it lists your notes created around the
-  call (`GET /v1/notes?created_after&created_before`), opens them (`GET /v1/notes/{id}?include=transcript`, or the paged
-  `/transcript` endpoint for long ones) and takes the one whose calendar event is that call (same event id, or the same start
-  time with a shared guest or title). No note yet: it looks again in 30 minutes. **Read Granola's note** in After the call does
-  the same at once.
+  call (`GET /v1/notes?created_after&created_before`), opens each without its transcript (`GET /v1/notes/{id}`) and takes the
+  one whose calendar event is that call (same event id, or the same start time with a shared guest or title). Only that note's
+  transcript is fetched (`?include=transcript`, or the paged `/transcript` endpoint for long ones); other meetings' never are.
+  No note yet: it looks again in 30 minutes. **Read Granola's note** in After the call does the same at once.
 - The transcript is read in memory and dropped. `records.json` keeps the note's title, link and summary (under `granola`) and,
-  as for any transcript, each mention with its sentence.
-- Mentions are looked up on the web like an uploaded transcript (name, role words, company name and website only).
+  as for any transcript, each mention with its sentence. The summary goes with the sentences after **Keep quotes for** in
+  Settings > Mentions and connections.
+- Mentions are looked up on the web like an uploaded transcript (name, role words, company name and website only). The read
+  MOAB does by itself follows **Look up mentions automatically**: with it off, they are listed but not looked up until you press
+  **Look up on the web** (**Read Granola's note** is your own action, so it still looks them up).
 - The key is only ever sent to `https://public-api.granola.ai`, never shown, logged or sent to the browser. Redirects aren't followed.
 
 **Untested against a real Granola account.** Built from Granola's API reference and tested against a fake server. Unconfirmed:
