@@ -617,6 +617,8 @@ class Research(Fresh):
 
     def test_connected_people_names_any_alphabet_and_no_family(self):
         self.assertTrue(S.looks_like_name("José García") and S.looks_like_name("Zoë Chen") and S.looks_like_name("Ian Lockhart"))
+        self.assertTrue(S.looks_like_name("Seán O'Brien") and S.looks_like_name("Anne-Marie Lee") and S.looks_like_name("John F. Kennedy"))
+        self.assertTrue(S._profile_text("She ran product at their parent company, Acme.", 260) and S._profile_text("Worked with Ana Cousins on the launch.", 260))
         self.assertFalse(S.looks_like_name("the team") or S.looks_like_name("Ian") or S.looks_like_name("Team 7 Leads"))
         for t in ("Her brother co-founded Acme with her.", "Her father, the CEO, hired her.", "Her sister-in-law runs sales."):
             self.assertEqual(S._profile_text(t, 260), "", t)

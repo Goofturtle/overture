@@ -2487,7 +2487,8 @@ PERSONAL_RE = re.compile(
     r"(?i)\b(?:spouses?|wife|wives|husbands?|married|marriage|fianc[ée]e?|divorc\w*|girlfriend|boyfriend|"
     r"(?:his|her|their|has|have)\s+(?:\w+\s+)?(?:children|kids|daughters?|sons?|child|baby|babies|family)|"
     r"(?:father|mother|mom|mum|dad|parent)\s+of|age\s+\d{1,3}|(?:his|her|their)\s+age|\d{1,3}[- ]years?[- ]old|born\s+(?:on|in)|birthday|"
-    r"(?:his|her|their)\s+(?:father|mother|parents?|mom|mum|dad|brothers?|sisters?|siblings?|cousins?|uncle|aunt|grand\w+)|siblings?|cousins?|\w+-in-laws?|"
+    r"(?:his|her|their)\s+(?:father|mother|parents?(?!\s+(?:company|companies|organi[sz]ations?|firm|group))|mom|mum|dad|brothers?|sisters?|"
+    r"siblings?|cousins?|uncle|aunt|grand\w+)|\w+-in-laws?|"
     r"home\s+address|lives\s+in|resides\s+in|religio\w*|(?:his|her|their)\s+faith|political\s+(?:part(?:y|ies)|views?|affiliation|leanings?)|"
     r"votes?\s+for|(?:his|her|their)\s+(?:health|illness|condition|diagnosis|recovery)|health\s+(?:condition|issue|problem|scare)s?|"
     r"diagnos(?:ed|is|es)|illness|pregnan\w*)\b")
@@ -2530,7 +2531,7 @@ def _profile_lines(items, resolve, limit, personal, when=False, chars=PROFILE_CH
 def looks_like_name(name):
     """2 to 4 capitalised words of letters (any alphabet: "José García", "Zoë Chen"), apostrophes, dots or hyphens."""
     words = str(name or "").split(" ")
-    return 2 <= len(words) <= 4 and all(re.fullmatch(r"[^\W\d_][^\W\d_'’.-]*", w) and w[0].isupper() for w in words)
+    return 2 <= len(words) <= 4 and all(re.fullmatch(r"[^\W\d_](?:[^\W\d_]|['’.-])*", w) and w[0].isupper() for w in words)
 
 
 def _profile_people(items, resolve):
