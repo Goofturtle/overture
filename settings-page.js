@@ -10,6 +10,7 @@
   const DEMO = MODE === "demo";
 
   Object.assign(C.ICONS, {
+    logOut: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
     mail: '<rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>',
     palette: '<circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/>',
     grip: '<circle cx="9" cy="12" r="1"/><circle cx="9" cy="5" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="19" r="1"/>',
@@ -456,11 +457,15 @@
   // ---------- the avatar menu (top bar): Settings, the theme, Data ----------
   function meMenuHtml() {
     const dark = S.get().appearance.theme === "dark";
-    return '<a role="menuitem" href="#/settings">' + ic("settings") + "<span>Settings</span></a>"
+    // Who is signed in (your Google account), and a way to sign out: it revokes MOAB's Google access and deletes the saved sign-in.
+    const g = (window.MOAB_STATUS || {}).google || {}, signedIn = !DEMO && g.connected;
+    const who = signedIn ? '<div class="me-who" role="presentation"><span class="me-who-l">Signed in with Google</span><span class="me-who-e">' + esc(g.email || "your Google account") + "</span></div>" : "";
+    const out = signedIn ? '<div class="me-sep" role="separator"></div><button type="button" role="menuitem" data-disconnect>' + ic("logOut") + "<span>Sign out</span></button>" : "";
+    return who + '<a role="menuitem" href="#/settings">' + ic("settings") + "<span>Settings</span></a>"
       + '<button type="button" role="menuitemcheckbox" aria-checked="' + dark + '" data-me-theme>' + ic(dark ? "sun" : "moon") + "<span>Dark theme</span></button>"
       + '<a role="menuitem" href="#/settings/appearance">' + ic("palette") + "<span>Appearance</span></a>"
       + '<a role="menuitem" href="#/settings/panel">' + ic("keyboard") + "<span>Keyboard shortcuts</span></a>"
-      + '<a role="menuitem" href="#/data">' + ic("database") + "<span>Data</span></a>";
+      + '<a role="menuitem" href="#/data">' + ic("database") + "<span>Data</span></a>" + out;
   }
   function openMe(focusFirst) {
     const menu = $("#meMenu"), btn = $("#meBtn");

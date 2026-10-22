@@ -2507,7 +2507,8 @@
   }
 
   async function disconnectGoogle() {
-    if (!confirm("Disconnect Google Calendar? MOAB stops reading your calls until you connect again. Your records stay on this PC.")) return;
+    const email = ((window.MOAB_STATUS || {}).google || {}).email;
+    if (!confirm("Sign out" + (email ? " of " + email : "") + "? MOAB stops reading your calendar until you sign in again. Your saved research and notes stay on this PC.")) return;
     try {
       const r = await C.fetchTimeout("/auth/google/disconnect", 15000, { method: "POST", headers: { "X-MOAB": "1" } });
       if (!r.ok) throw new Error();

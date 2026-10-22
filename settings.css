@@ -218,6 +218,11 @@ label.st-label { cursor: pointer; }
 .me-menu [role^="menuitem"] .ic { color: var(--muted); }
 .me-menu [role^="menuitem"]:hover, .me-menu [role^="menuitem"]:focus-visible { background: var(--hover); outline: none; }
 .me-menu [aria-checked="true"] { color: var(--accent); }
+/* Who is signed in (top of the menu) and Sign out (bottom, after a divider). */
+.me-who { display: grid; gap: 1px; padding: 8px 10px 10px; margin-bottom: 4px; border-bottom: 1px solid var(--line); min-width: 0; }
+.me-who-l { font-size: 12px; line-height: 1.45; color: var(--muted); }
+.me-who-e { font-size: 13.5px; font-weight: 600; line-height: 1.4; color: var(--ink); overflow-wrap: anywhere; }
+.me-sep { height: 1px; margin: 4px 2px; background: var(--line); }
 
 @media (prefers-reduced-motion: reduce) {
   .st-switch, .st-switch::after, .st-seg-opt span, .st-menu a, .st-fold .chev { transition: none; }
