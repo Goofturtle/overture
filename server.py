@@ -1,4 +1,4 @@
-"""Serve Cue on http://localhost:3576 with real calls from Google Calendar, its own records store, and optional Claude.
+"""Serve Overture on http://localhost:3576 with real calls from Google Calendar, its own records store, and optional Claude.
 
 Run from anywhere:  tks-spotify/.venv/Scripts/python.exe tks-spotify/centralize/server.py [--port 3576]
 
@@ -8,7 +8,7 @@ Run from anywhere:  tks-spotify/.venv/Scripts/python.exe tks-spotify/centralize/
 - Claude is optional: set ANTHROPIC_API_KEY first. Without it the page uses on-device AI or its built-in rules.
 - With Claude, new guests on your calls and their companies are researched in the background (work profile, past work, company
   facts, with public sources). Only their name, company and company domain are sent; see "invitee research" below for the rules.
-- HubSpot and Gong are optional: run tools/connect.py once (docs/HUBSPOT-SETUP.md, docs/GONG-SETUP.md). Cue reads companies,
+- HubSpot and Gong are optional: run tools/connect.py once (docs/HUBSPOT-SETUP.md, docs/GONG-SETUP.md). Overture reads companies,
   deals, contacts and notes from HubSpot and the last call's summary from Gong, and writes to HubSpot only when you press
   "Save to HubSpot" after a call.
 Secrets and tokens stay in .data/ (git-ignored) and are never logged or sent to the browser.
@@ -83,25 +83,25 @@ DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 SYSTEM = (
     "You write a short call brief for Chris, an account executive who sells Spotify's Backstage products "
     "(Portal, Confidence and Xirp). You get the facts as JSON. Each fact says where it came from: public data, "
-    "sample data, the user's own calendar, Cue's records, or Cue's own web research (each people[].profile and "
-    "company.profile, built from public pages Cue searched and read). "
+    "sample data, the user's own calendar, Overture's records, or Overture's own web research (each people[].profile and "
+    "company.profile, built from public pages Overture searched and read). "
     "Use only these facts. Do not add numbers, names or claims that are not in them. "
     "Write in plain, short words that a busy salesperson can read in one minute. No headings, no metaphors. "
     "Plain text only: no markdown, no bullets, no bold. "
     "Write 4 to 6 short lines: who the company is and what it does, who the people are at work (their current role and the "
     "past work that matters), what changed since last time, their Backstage situation, who matters on the call and why, "
     "and last, what to bring up on the call. "
-    "Cue has already done the research and saved it to its records. So never tell the reader to look anything up, search, "
-    "research, check, verify or confirm anything, or add anything to Cue's records, and never call a fact automatic or unconfirmed. "
-    "Leave out any to-do in the facts that asks for that. If Cue found nothing about someone or something, say plainly that "
-    "Cue searched and found nothing public about it. End with what to bring up on the call, never a chore to do before it."
+    "Overture has already done the research and saved it to its records. So never tell the reader to look anything up, search, "
+    "research, check, verify or confirm anything, or add anything to Overture's records, and never call a fact automatic or unconfirmed. "
+    "Leave out any to-do in the facts that asks for that. If Overture found nothing about someone or something, say plainly that "
+    "Overture searched and found nothing public about it. End with what to bring up on the call, never a chore to do before it."
 )
 ASK_SYSTEM = (
-    "You are Cue, a call-prep assistant for a salesperson who sells Spotify's Backstage products. "
-    "Answer the question using only the facts in the JSON you get (their calendar, Cue's records, Cue's own web research and "
+    "You are Overture, a call-prep assistant for a salesperson who sells Spotify's Backstage products. "
+    "Answer the question using only the facts in the JSON you get (their calendar, Overture's records, Overture's own web research and "
     "public Backstage data). "
-    "If the facts do not answer it, say so in one line and say what Cue couldn't find (Cue has already searched its records and "
-    "the web). Never tell them to look something up or to add it to Cue's records. "
+    "If the facts do not answer it, say so in one line and say what Overture couldn't find (Overture has already searched its records and "
+    "the web). Never tell them to look something up or to add it to Overture's records. "
     "Plain text only, no markdown, at most four short sentences."
 )
 
@@ -288,7 +288,7 @@ def exchange_code(code, verifier):
         raise GoogleError("Google did not accept the sign-in (" + str(j.get("error") or status) + ")", status, j.get("error", ""))
     granted = set(str(j.get("scope", "")).split())
     if CAL_SCOPE not in granted:
-        raise GoogleError("Cue needs to see your calendar. Connect again and tick the calendar box on Google's screen.", 400, "scope")
+        raise GoogleError("Overture needs to see your calendar. Connect again and tick the calendar box on Google's screen.", 400, "scope")
     status, me = HTTP("GET", USERINFO_URL, headers={"Authorization": "Bearer " + j["access_token"]})
     me = me if status == 200 else {}
     tok = {
@@ -444,7 +444,7 @@ def short_day(d):
     return f"{MONTHS[d.month - 1]} {d.day}"
 
 
-# ---------------------------------------------------------------- events -> Cue data ----------------------------------------------------------------
+# ---------------------------------------------------------------- events -> Overture data ----------------------------------------------------------------
 
 def domain_of(email):
     email = str(email or "").strip().lower()
@@ -628,7 +628,7 @@ def _declined(ev, me_email):
 
 
 def event_to_invite(ev, me_email, records):
-    """One calendar event -> one Cue invite, or None when it isn't a call Cue should prep."""
+    """One calendar event -> one Overture invite, or None when it isn't a call Overture should prep."""
     me_email = str(me_email or "").lower()
     if ev.get("status") == "cancelled" or _declined(ev, me_email):
         return None
@@ -691,7 +691,7 @@ RECENT_HOURS = 48  # a call stays on the list this long after it ends, marked en
 
 
 def upcoming_invites(events, me_email, records, now):
-    """The calls Cue preps: the next DAYS_AHEAD days, plus calls that ended in the last RECENT_HOURS (ended: true), with
+    """The calls Overture preps: the next DAYS_AHEAD days, plus calls that ended in the last RECENT_HOURS (ended: true), with
     ids made unique."""
     invites = []
     for ev in events:
@@ -735,12 +735,12 @@ def build_live(events, me, records, now=None, meta_out=None, crm=None):
             p = {"photo": "", "title": str(r.get("title", "")), "startedAt": str(r.get("startedAt", "")), "previous": str(r.get("previous", "")),
                  "previousRole": "", "known": user_known(r), "note": str(r.get("note", ""))}
             hs = hs_people.get(a["email"])
-            if hs:  # HubSpot's title first; a title you typed in Cue still shows (and can be sent to HubSpot after the call)
+            if hs:  # HubSpot's title first; a title you typed in Overture still shows (and can be sent to HubSpot after the call)
                 p["known"], p["hubspot"] = True, True
                 if hs.get("title") and not user_has_title(r):
                     p["title"], p["titleSrc"] = hs["title"], "HubSpot"
                 elif p["title"]:
-                    p["titleSrc"] = "Cue records"
+                    p["titleSrc"] = "Overture records"
             d = domain_of(a["email"])
             seen = by_name.get(norm_name(a["name"]))
             if personish(a) and seen and d and d not in PERSONAL_DOMAINS and not same_org(seen["domain"], d, records) and a["email"] not in flagged:
@@ -803,7 +803,7 @@ def build_live(events, me, records, now=None, meta_out=None, crm=None):
                 rel = RELATIONSHIPS.get(str(r.get("relationship") or ""), "")
                 facts = ", ".join(x for x in (title, rel, str(r.get("team") or "")) if x)
                 summary = ((profile_view(r.get("profile"), "person") or {}).get("summary") or {}).get("text", "")
-                text = (" ".join(x for x in ("Cue looked them up" + (": " + facts if facts else "") + ".", summary) if x)
+                text = (" ".join(x for x in ("Overture looked them up" + (": " + facts if facts else "") + ".", summary) if x)
                         if r.get("lookup") == "done" else searched_note(r, "work information about them") + " Ask what they do on the call.")
                 watch.append({"date": short_day(to_et(found_at).date()), "kind": "New person", "callId": inv["id"], "person": a["name"],
                               "title": "New on the " + inv["company"] + " call: " + a["name"] + ", " + (title or "role unknown"), "text": text})
@@ -830,7 +830,7 @@ def build_live(events, me, records, now=None, meta_out=None, crm=None):
     companies = {}
     with_history ={u.get("company") for items in updates.values() if isinstance(items, list) for u in items if isinstance(u, dict)}
     all_cos = dict(rec_cos)
-    for name in with_history:  # accepted after-call updates make a company part of Cue's records too
+    for name in with_history:  # accepted after-call updates make a company part of Overture's records too
         if name and name not in all_cos:
             all_cos[name] = {}
     for name, c in all_cos.items():
@@ -901,7 +901,7 @@ def granola_status():
 
 
 def live_now(records, meta_out=None, now=None):
-    """Your calendar + Cue records + HubSpot and Gong -> (live data, the HubSpot/Gong data it used). Raises GoogleError / NotConnected."""
+    """Your calendar + Overture records + HubSpot and Gong -> (live data, the HubSpot/Gong data it used). Raises GoogleError / NotConnected."""
     now = now or datetime.now(timezone.utc)
     tok = token_info() or {}
     me = {"email": tok.get("email", ""), "name": tok.get("name", "")}
@@ -1488,11 +1488,11 @@ def brief_facts(body, records):
             body["people"] = [{k: v for k, v in p.items() if k != "note"} if isinstance(p, dict) else p for p in body["people"]]
         if isinstance(body.get("company"), dict):
             body["company"] = {k: v for k, v in body["company"].items() if k not in ("notes", "history")}
-    return research_facts(body, records)  # Cue's web research is public information, so it goes whatever the setting
+    return research_facts(body, records)  # Overture's web research is public information, so it goes whatever the setting
 
 
 def research_facts(body, records):
-    """Add Cue's own web research to the page's brief facts (people[].profile, company.profile) where the page didn't send it:
+    """Add Overture's own web research to the page's brief facts (people[].profile, company.profile) where the page didn't send it:
     a person's profile when their name and company match the call, the company's when its domain's company is the call's."""
     call = body.get("call") if isinstance(body.get("call"), dict) else {}
     co = norm_name(call.get("company") or "")
@@ -1516,12 +1516,12 @@ def research_facts(body, records):
             if "profile" not in body["company"]:
                 body["company"] = dict(body["company"], profile=prof)
         elif body.get("company") is None:
-            body["company"] = {"source": "Cue web research", "profile": prof}
+            body["company"] = {"source": "Overture web research", "profile": prof}
     return body
 
 
 def ai_trim(live, records):
-    """What Ask Cue may send to Claude, per Settings > Research & privacy. "titles": no call notes and no notes in the records."""
+    """What Ask Overture may send to Claude, per Settings > Research & privacy. "titles": no call notes and no notes in the records."""
     if ai_share(records) != "titles":
         return live, records
     strip = lambda d, keys: {k: v for k, v in d.items() if k not in keys} if isinstance(d, dict) else d  # noqa: E731
@@ -1608,21 +1608,21 @@ def company_facts(c):
     if not isinstance(c, dict):
         return None
     return {"status": c.get("status"), "employees": c.get("employees"), "engineers": c.get("engineers"), "deals": c.get("deals"),
-            "notes": c.get("notes"), "history": (c.get("history") or [])[-5:], "sources": c.get("src") or "Cue records"}
+            "notes": c.get("notes"), "history": (c.get("history") or [])[-5:], "sources": c.get("src") or "Overture records"}
 
 
 PERSON_ASK_SYSTEM = (
-    "You answer a salesperson's question about one person before or during a call. Use only the facts in the JSON: Cue's "
+    "You answer a salesperson's question about one person before or during a call. Use only the facts in the JSON: Overture's "
     "research on them (from public pages, each fact tagged with its source number like [2]), their company and their calls. "
     "Answer in 1 to 3 short plain sentences, no markdown. After each fact you use, put its source number in square brackets, "
-    "like [2]. If the facts don't answer it, say in one sentence that Cue's research doesn't show that. Never guess, and never "
+    "like [2]. If the facts don't answer it, say in one sentence that Overture's research doesn't show that. Never guess, and never "
     "add personal details (family, age, health, home, contact details)."
 )
 
 
 def person_context(email, records):
     """One guest for a quick question: their research with numbered sources (1 = the first source, as the page numbers them),
-    their company's research and their calls. From Cue's saved records only: no web search, so it answers in seconds."""
+    their company's research and their calls. From Overture's saved records only: no web search, so it answers in seconds."""
     rec = (records.get("people") or {}).get(email) or {}
     prof = profile_view(rec.get("profile"), "person")
     with RQ_LOCK:
@@ -1855,13 +1855,13 @@ def skip_reason(email, m, rec, forced=False):
     """Why this guest is not looked up on the web ("" when they can be)."""
     d = domain_of(email)
     if not d or personal_domain(d):
-        return "Personal email address, so Cue doesn't look them up on the web."
+        return "Personal email address, so Overture doesn't look them up on the web."
     if m.get("internal"):
         return "Works at your own company."
     if fake_domain(d):
         return "Can't find this person: " + d + " isn't a real company (it's an example address), so there is no one to look up."
     if not m.get("named") or not personish({"name": m.get("name", ""), "email": email}):
-        return "No name on the invite, and their email address doesn't show one, so Cue can't look them up."
+        return "No name on the invite, and their email address doesn't show one, so Overture can't look them up."
     if m.get("crm") or (not forced and (rec.get("found") == "confirmed" or user_has_title(rec))):
         return " "  # HubSpot has their title, or the user filled this in or confirmed it: nothing to say
     # Look up again (forced) still runs for someone you confirmed: it refreshes the research profile and who they're connected
@@ -1874,7 +1874,7 @@ def skip_reason(email, m, rec, forced=False):
 
 
 def needs_research(rec, now):
-    """Looked up before deep research existed (no profile of this version): once more, even with a title Cue found. Otherwise:
+    """Looked up before deep research existed (no profile of this version): once more, even with a title Overture found. Otherwise:
     no title yet, and not looked up in the last 30 days. Never when you confirmed them or typed their title."""
     if rec.get("found") == "confirmed" or user_has_title(rec):
         return False
@@ -1926,7 +1926,7 @@ def request_research(email):
     if reason == NO_KEY_NOTE:
         return 503, {"error": "no-key"}
     if reason:
-        return 400, {"error": reason.strip() or "You confirmed their details, so Cue doesn't look them up again."}
+        return 400, {"error": reason.strip() or "You confirmed their details, so Overture doesn't look them up again."}
     with RQ_LOCK:
         RQ["errors"].pop(email, None)
         if email not in RQ["pending"] and email not in RQ["running"]:
@@ -2279,7 +2279,7 @@ def research_request(name, company, domain, email):
               "their notable work. Answer with the JSON object only.")
     req = deep_request(RESEARCH_SYSTEM, user)
     if leaks_email(user, email, name):  # belt and braces: refuse rather than send an address
-        raise ResearchError("their name looks like their email address, so Cue didn't send it")
+        raise ResearchError("their name looks like their email address, so Overture didn't send it")
     return req
 
 
@@ -2314,7 +2314,7 @@ def extract_json(text):
 
 
 def clean_research(obj, seen=None):
-    """Claude's JSON -> what Cue keeps. Unsourced, unparseable or low-confidence answers become "unknown"."""
+    """Claude's JSON -> what Overture keeps. Unsourced, unparseable or low-confidence answers become "unknown"."""
     out = unknown_result()
     if not isinstance(obj, dict) or obj.get("found") is not True or obj.get("confidence") not in ("high", "medium"):
         return out
@@ -2529,9 +2529,9 @@ def sites_searched(seen):
 
 
 def searched_note(rec, what):
-    """The plain note for research that found nothing, like "Cue searched 6 sites and found no public work information about them."."""
+    """The plain note for research that found nothing, like "Overture searched 6 sites and found no public work information about them."."""
     n = rec.get("searched") if isinstance(rec.get("searched"), int) and not isinstance(rec.get("searched"), bool) else 0
-    return ("Cue searched " + (str(n) + (" site" if n == 1 else " sites") if n > 0 else "the web") + " and found no public " + what + ".")
+    return ("Overture searched " + (str(n) + (" site" if n == 1 else " sites") if n > 0 else "the web") + " and found no public " + what + ".")
 
 
 # ---- research profiles (contract A: a person, B: a company) ----
@@ -2718,7 +2718,7 @@ def profile_for_ai(p):
     """A profile as plain sentences for a brief or an answer (Claude doesn't need the page addresses)."""
     if not isinstance(p, dict):
         return None
-    out = {"from": "Cue's web research (public pages)", "name": p.get("name", "")}
+    out = {"from": "Overture's web research (public pages)", "name": p.get("name", "")}
     if p.get("summary"):
         out["summary"] = p["summary"]["text"]
     for k in ("now", "education", "work", "what", "tech", "forCall"):
@@ -2734,8 +2734,8 @@ def profile_for_ai(p):
 
 
 _AHEAD = "a week" if DEEP_DAYS_AHEAD == 7 else str(DEEP_DAYS_AHEAD) + " days"
-LATER_NOTE = "Cue researches them in depth " + _AHEAD + " before the call."
-ORG_LATER_NOTE = "Cue researches this company in depth " + _AHEAD + " before the call."
+LATER_NOTE = "Overture researches them in depth " + _AHEAD + " before the call."
+ORG_LATER_NOTE = "Overture researches this company in depth " + _AHEAD + " before the call."
 
 
 def research_status(email, rec, m, now=None):
@@ -3004,7 +3004,7 @@ def api_call(service, method, path, body=None, deadline=None):
     status, j, hdrs = 0, {}, {}
     for attempt in (0, 1):
         if deadline and _time.time() > deadline:
-            raise Slow(name + " is slow, so Cue stopped asking for now")
+            raise Slow(name + " is slow, so Overture stopped asking for now")
         try:
             status, j, hdrs = API_HTTP(method, url, body, {"Authorization": auth})
         except ApiError as e:
@@ -3024,7 +3024,7 @@ def api_call(service, method, path, body=None, deadline=None):
                                                     "gong": "the key has no access from here, see Settings > Setup guides > Connect Gong"}.get(service,
                                                     "API access may be off for your workspace, see Settings > Setup guides > After the call with Granola"), 403)
     if status == 429:
-        raise ApiError(name + " is limiting requests (429). Cue tries again in a minute.", 429)
+        raise ApiError(name + " is limiting requests (429). Overture tries again in a minute.", 429)
     raise ApiError(name + " answered " + str(status), status)
 
 
@@ -3154,7 +3154,7 @@ def hubspot_contacts(emails, deadline=None):
 
 
 def hubspot_status(info):
-    """Company status in Cue's words: the open deal's stage, a customer, or a new lead."""
+    """Company status in Overture's words: the open deal's stage, a customer, or a new lead."""
     open_deals = [d for d in info.get("deals") or [] if not d.get("closed")]
     if open_deals:
         return "Open deal: " + (open_deals[0].get("stage") or "open")
@@ -3200,7 +3200,7 @@ def gong_index(now=None, deadline=None):
     """Gong calls in the last 180 days: id, start, title, duration, link, and its participants' email domains.
     Gong documents no sort order (calls may come oldest first), so it asks for the last 14 days first, then further back,
     with one page budget for all of them. If the time budget runs out, the newest calls it has are kept (and cached).
-    Private calls (metaData.isPrivate) are skipped: Gong hides them from most users, and Cue reads with an admin key."""
+    Private calls (metaData.isPrivate) are skipped: Gong hides them from most users, and Overture reads with an admin key."""
     now = now or datetime.now(timezone.utc)
 
     def get():
@@ -3323,7 +3323,7 @@ def crm_fetch(invites, me_email, records, now=None):
         except ApiError as e:
             crm_note(service, False, str(e))
             continue
-        except Exception:  # an answer Cue didn't expect: never break the page, never show its text (it could quote a secret)
+        except Exception:  # an answer Overture didn't expect: never break the page, never show its text (it could quote a secret)
             crm_note(service, False, SERVICE_NAMES[service] + " failed unexpectedly")
             continue
         if service == "hubspot":
@@ -3411,7 +3411,7 @@ def note_html(inv, text):
     """The note's body for HubSpot: every character you typed is escaped; line breaks become <br>."""
     lines = html_escape(text).replace("\r\n", "\n").split("\n")
     return ("<p><strong>" + html_escape(inv["title"]) + "</strong> · " + html_escape(inv["when"]) + "</p><p>" + "<br>".join(lines)
-            + "</p><p>Saved from Cue</p>")
+            + "</p><p>Saved from Overture</p>")
 
 
 def hubspot_plan(c, live, crm, records):
@@ -3420,8 +3420,8 @@ def hubspot_plan(c, live, crm, records):
     if not inv:
         raise Invalid("That call isn't on your calendar any more.")
     companies = crm.get("companies") or {}
-    if inv.get("domain") and inv["domain"] not in companies:  # the time budget ran out before Cue asked about it
-        raise Invalid("HubSpot is slow right now, so Cue couldn't check " + inv["company"] + " yet. Try again in a moment.")
+    if inv.get("domain") and inv["domain"] not in companies:  # the time budget ran out before Overture asked about it
+        raise Invalid("HubSpot is slow right now, so Overture couldn't check " + inv["company"] + " yet. Try again in a moment.")
     info = companies.get(inv.get("domain") or "")
     if not info:
         raise Invalid("HubSpot has no company with the website " + (inv.get("domain") or "of these guests") + ", so there's nothing to add the note to.")
@@ -3434,8 +3434,8 @@ def hubspot_plan(c, live, crm, records):
         r = rec_people.get(a["email"]) or {}
         mine = clean_text(r.get("title"), 120)
         if mine and mine.lower() != (hs.get("title") or "").lower():
-            why = ("you confirmed it in Cue" if r.get("found") == "confirmed"
-                   else "Cue found it automatically" if "title" in (r.get("autoFields") or []) else "you typed it in Cue")
+            why = ("you confirmed it in Overture" if r.get("found") == "confirmed"
+                   else "Overture found it automatically" if "title" in (r.get("autoFields") or []) else "you typed it in Overture")
             candidates.append({"email": a["email"], "name": a["name"], "from": hs.get("title") or "", "to": mine, "why": why, "contactId": hs["id"]})
     known = {x["email"] for x in candidates}
     for e in c["titles"]:
@@ -3446,7 +3446,7 @@ def hubspot_plan(c, live, crm, records):
     return {
         "company": {"id": info["id"], "name": info.get("name") or inv["company"]},
         "note": {"text": c["note"], "html": note_html(inv, c["note"]),
-                 "preview": inv["title"] + " · " + inv["when"] + "\n\n" + c["note"] + "\n\nSaved from Cue"} if c["note"] else None,
+                 "preview": inv["title"] + " · " + inv["when"] + "\n\n" + c["note"] + "\n\nSaved from Overture"} if c["note"] else None,
         "contacts": [{"id": hs["id"], "name": hs.get("name") or a["name"], "email": a["email"]} for a, hs in on_call],
         "deal": {"id": deal["id"], "name": deal["name"], "stage": deal.get("stage", "")} if deal else None,
         "titleChanges": picked,
@@ -3517,7 +3517,7 @@ def hubspot_save(body):
     if not hubspot_token():
         return 409, {"error": "HubSpot isn't connected. See Settings > Setup guides > Connect HubSpot."}
     if not token_info():
-        return 409, {"error": "Connect Google Calendar first, so Cue knows the call."}
+        return 409, {"error": "Connect Google Calendar first, so Overture knows the call."}
     try:
         c = clean_hubspot_save(body)
         records = load_records()
@@ -3531,7 +3531,7 @@ def hubspot_save(body):
     except Invalid as e:
         return 400, {"error": str(e)}
     except (GoogleError, NotConnected):
-        return 502, {"error": "Google Calendar didn't answer, so Cue can't check the call. Try again."}
+        return 502, {"error": "Google Calendar didn't answer, so Overture can't check the call. Try again."}
     if not c["confirm"]:
         return 200, {"ok": True, "plan": public_plan(plan)}
     if c["planId"] != plan_id(plan):  # HubSpot (or the last save) changed since the preview: show the new one first
@@ -3546,15 +3546,15 @@ def hubspot_save(body):
 
 
 # ---------------------------------------------------------------- people mentioned on the call ----------------------------------------------------------------
-# After a call, Cue finds the people who were talked about (not the guests) in a transcript you drop or paste in (Zoom or
+# After a call, Overture finds the people who were talked about (not the guests) in a transcript you drop or paste in (Zoom or
 # Google Meet .vtt, .srt or .txt), in your own call notes, or (only with "Read Gong transcripts" on) in Gong's transcript.
 # The owner's rules, enforced here:
 # - The transcript is read in memory and dropped. Only each mention and one sentence (with speaker and time) are saved.
 # - Mentions are found here with plain rules (and in the browser with Chrome's on-device AI, when it has it). No outside service.
-# - People Cue already knows (calendar, records, HubSpot) show at once. Anyone else is looked up on the web by the research
+# - People Overture already knows (calendar, records, HubSpot) show at once. Anyone else is looked up on the web by the research
 #   worker, with the same blocked sites and rules: Claude gets the name (or first name), the role or team words, the company
 #   name and its domain. Never the transcript, never the quote.
-# - A partial mention ("Maria from security") comes back as up to 3 candidates to pick from. Cue never picks for you.
+# - A partial mention ("Maria from security") comes back as up to 3 candidates to pick from. Overture never picks for you.
 # - Nothing from a transcript reaches Claude's answers unless "Use transcripts in AI answers" is on (Data page, off by default).
 
 MAX_TRANSCRIPT_CHARS = 1_000_000   # about 1 MB of text: a 3-hour call is well under it
@@ -3829,7 +3829,7 @@ def _title_matches(role, title):
 
 
 def mention_context(events, me, records, call_id, now=None, hs_contacts=None):
-    """What extraction needs about one call: its company, guests, you, and the people Cue already knows there. None if the call isn't found."""
+    """What extraction needs about one call: its company, guests, you, and the people Overture already knows there. None if the call isn't found."""
     now = now or datetime.now(timezone.utc)
     me_email = str((me or {}).get("email", "")).lower()
     inv = next((i for i in upcoming_invites(events, me_email, records, now) if i["id"] == call_id), None)
@@ -3875,13 +3875,13 @@ def mention_context(events, me, records, call_id, now=None, hs_contacts=None):
             if d and same_org(d, domain, records) and personish({"name": dn, "email": em}):
                 r = rec_people.get(em) or {}
                 put(dn, title=str(r.get("title") or ""), team=str(r.get("team") or ""), relationship=str(r.get("relationship") or ""),
-                    **{"from": "Cue records" if r.get("title") else "Your calendar"})
+                    **{"from": "Overture records" if r.get("title") else "Your calendar"})
         for c in hs_contacts or []:
             put(c.get("name", ""), title=c.get("title", ""), **{"from": "HubSpot"})
         for k, p in (records.get("knownPeople") or {}).items():
             if isinstance(p, dict) and p.get("domain") and same_org(str(p["domain"]), domain, records):
                 put(p.get("name", ""), title=p.get("title", ""), team=p.get("team", ""), relationship=p.get("relationship", ""),
-                    sources=p.get("sources") or [], **{"from": "Cue records"})
+                    sources=p.get("sources") or [], **{"from": "Overture records"})
     titles = []
     for a in inv["attendees"]:
         t = str((rec_people.get(a["email"]) or {}).get("title") or "")
@@ -3984,7 +3984,7 @@ def extract_mentions(lines, ctx, hints=None):
                 if any(_title_matches(role, t) for t in ctx["attendeeTitles"]):
                     continue  # that's someone on the call
                 note("r:" + role.lower(), "", role, "role", line, sent, m.start(), m.end())
-            for m in SINGLE_NAME_RE.finditer(sent):  # a first name alone counts only when Cue knows one person by it there
+            for m in SINGLE_NAME_RE.finditer(sent):  # a first name alone counts only when Overture knows one person by it there
                 w = m.group(1)
                 if any(s <= m.start() < e for s, e, _ in taken) or len(known_first.get(w.lower(), [])) != 1 or not ok_first(w):
                     continue
@@ -4034,7 +4034,7 @@ def extract_mentions(lines, ctx, hints=None):
 
 
 # ---- companies mentioned on the call, and what the call itself says about a relation (local rules only) ----
-# A company is picked up when Cue knows the name (the public Backstage adopters list, well-known vendors, Cue records, your
+# A company is picked up when Overture knows the name (the public Backstage adopters list, well-known vendors, Overture records, your
 # calendar's companies, HubSpot companies it has already read), when a strong cue comes before it ("switched from", "moving to",
 # "partnered with", "acquired by", "over at"...), when it ends in a company word (Inc, Labs, Systems, AI...), or when it is said
 # with a possessive and a product word ("Brightwave's pricing"). The call's own company, Spotify, its products, places, days,
@@ -4111,7 +4111,7 @@ def _org_variants(org):
 
 
 def known_orgs(events, records, own_domain, me_email):
-    """Company names Cue already knows -> {"name", "domain"}: the adopters list, well-known vendors, Cue records,
+    """Company names Overture already knows -> {"name", "domain"}: the adopters list, well-known vendors, Overture records,
     the companies in your calendar and the HubSpot companies it has read lately."""
     out = {}
 
@@ -4417,7 +4417,7 @@ def org_request(a_name, a_domain, b_name, b_domain):
     if not b_name or "@" in a_name + b_name or not DOMAIN_RE.match(a_domain) or personal_domain(a_domain):
         raise ResearchError("not enough to look it up")
     if CODENAME_RE.search(b_name):
-        raise ResearchError("that looks like a codename, so Cue didn't send it")
+        raise ResearchError("that looks like a codename, so Overture didn't send it")
     if b_domain and (not DOMAIN_RE.match(b_domain) or personal_domain(b_domain)):
         b_domain = ""
     user = ("Company A: " + (a_name or a_domain) + "\nCompany A website: " + a_domain + "\nCompany B: " + b_name
@@ -4506,7 +4506,7 @@ def do_org_lookup(job, now=None):
         if it.get("status") != "pending":
             return  # the call explained it meanwhile, or you changed it
         it.update(status="found" if rel["type"] != "unknown" else "unknown", relation=dict(rel), lookedAt=now_iso(),
-                  note="" if rel["type"] != "unknown" else "Cue looked on the web and found no public source on how they relate.")
+                  note="" if rel["type"] != "unknown" else "Overture looked on the web and found no public source on how they relate.")
     update_org(job["callId"], job["id"], apply)
 
 
@@ -4744,7 +4744,7 @@ def explain_view(kind, it, block):
     sd = it.get("said") if isinstance(it.get("said"), dict) else {}
     said = {"text": clean_text(sd.get("said"), 200), "speaker": clean_text(sd.get("speaker"), 80), "time": clean_text(sd.get("time"), 12)} if sd.get("said") else None
     rel = str(p.get("relationship") or sd.get("relationship") or "")
-    how = "Likely, not confirmed" if likely else "Known to Cue" if it.get("status") == "known" else "Found on the web" if p.get("from") == "Web" else (p.get("from") or "")
+    how = "Likely, not confirmed" if likely else "Known to Overture" if it.get("status") == "known" else "Found on the web" if p.get("from") == "Web" else (p.get("from") or "")
     return {"kind": "person", "name": clean_text(p.get("name") or it.get("name") or it.get("role"), 100), "title": clean_text(p.get("title"), 120),
             "type": rel if rel in RELATIONSHIPS else "", "typeLabel": RELATIONSHIPS.get(rel, "") if rel != "unknown" else "",
             "label": clean_text(sd.get("label"), 80) or clean_text(it.get("role"), 80), "team": clean_text(p.get("team"), 120),
@@ -4907,7 +4907,7 @@ def mention_request(name, role, company, domain):
     if (not name and not role) or "@" in name + role + company or not DOMAIN_RE.match(domain) or personal_domain(domain):
         raise ResearchError("not enough to look them up")
     if CODENAME_RE.search(name + " " + role):
-        raise ResearchError("that looks like a codename, so Cue didn't send it")
+        raise ResearchError("that looks like a codename, so Overture didn't send it")
     user = ("Mentioned on the call: " + (name or "(no name given)") + "\nRole or team: " + (role or "(not said)")
             + "\nCompany: " + (company or domain) + "\nCompany website: " + domain
             + "\n\nWho is this? Answer with the JSON object only.")
@@ -5020,7 +5020,7 @@ def do_mention_lookup(job, now=None):
         if it.get("status") != "pending":
             return  # you answered it meanwhile
         it.update(status=status, person=cands[0] if auto else None, candidates=cands if status == "pick" else [], autoFound=auto,
-                  note="" if cands else "Cue looked on the web and found no one who clearly fits.", lookedAt=now_iso())
+                  note="" if cands else "Overture looked on the web and found no one who clearly fits.", lookedAt=now_iso())
     update_mention(job["callId"], job["id"], apply)
 
 
@@ -5040,7 +5040,7 @@ def queue_mention(call_id, block, it, forced=False):
         ensure_worker()
 
 
-WEB_OFF_NOTE = "Web research is off (Settings > Research sources and privacy), so Cue didn't look it up on the web."
+WEB_OFF_NOTE = "Web research is off (Settings > Research sources and privacy), so Overture didn't look it up on the web."
 AUTO_OFF_NOTE = "Automatic look-up is off (Settings > Mentions and connections). Press Look up on the web to look it up."
 AUTO_SOURCES = ("live", "meetily", "captions")   # found while the call runs: looked up on their own only with automatic look-up on
 
@@ -5050,7 +5050,7 @@ def lookup_blocker(block, auto=False, records=None):
     you type, Meetily), which only goes to the web by itself while Settings > Mentions > automatic look-up is on."""
     d = block.get("domain") or ""
     if not d or personal_domain(d):
-        return "This call has no company web address, so Cue can't look people up for it."
+        return "This call has no company web address, so Overture can't look people up for it."
     if not source_on("web", records):
         return WEB_OFF_NOTE
     if not claude_on():
@@ -5351,7 +5351,7 @@ def gong_transcript_lines(inv, now=None):
 
 
 def _from_node(speaker, ctx):
-    """Who said it, as a map node: "you" for you and your notes, "p:<email>" for a guest, "" when Cue can't tell."""
+    """Who said it, as a map node: "you" for you and your notes, "p:<email>" for a guest, "" when Overture can't tell."""
     if not speaker or _is_me(speaker, ctx):
         return "you"
     n = norm_name(speaker)
@@ -5368,7 +5368,7 @@ def find_all(lines, ctx, hints=None, final=True):
     final: the text is complete (a transcript, or a saved note); while you are still typing, a company with no explanation yet waits."""
     people = extract_mentions(lines, ctx, hints)
     known = {norm_org(k) for k in ctx.get("orgs") or {}}
-    people = [p for p in people if not (p["kind"] == "full" and norm_org(p["name"]) in known)]  # "Acme Freight" is a company Cue knows
+    people = [p for p in people if not (p["kind"] == "full" and norm_org(p["name"]) in known)]  # "Acme Freight" is a company Overture knows
     orgs = extract_orgs(lines, ctx, people)
     named = {norm_org(o["name"]) for o in orgs} | {norm_org(o["said"]) for o in orgs}
     people = [p for p in people if not (p["kind"] == "full" and norm_org(p["name"]) in named)]  # "Acme Robotics Inc": a company, not a person
@@ -5386,7 +5386,7 @@ def find_all(lines, ctx, hints=None, final=True):
 
 
 def _untouched(it):
-    """A person mention you haven't acted on (confirmed, picked, added, saved to HubSpot or removed), so Cue may take it back."""
+    """A person mention you haven't acted on (confirmed, picked, added, saved to HubSpot or removed), so Overture may take it back."""
     if it.get("confirmed") or it.get("added") or it.get("hubspot") or it.get("removed") or it.get("pickedAt"):
         return False
     return it.get("status") != "found" or bool(it.get("autoFound"))
@@ -5446,7 +5446,7 @@ def save_mentions(call_id, ctx, found, source, orgs=None, bump=True, now=None, d
                 it.update(status="known", person=dict(f["known"]))
             elif f.get("candidates"):
                 it.update(status="pick", candidates=[dict(c) for c in f["candidates"]],
-                          note="People Cue already knows at " + (ctx["company"] or "this company") + " by that " + ("name" if f["name"] else "title") + ".")
+                          note="People Overture already knows at " + (ctx["company"] or "this company") + " by that " + ("name" if f["name"] else "title") + ".")
             elif blocker:
                 it.update(status=blocked_status(blocker), note=blocker)
             else:
@@ -5527,7 +5527,7 @@ HS_WARMING = set()           # domains whose HubSpot contacts are being fetched 
 
 
 def _domain_contacts_cached(domain):
-    """For live notes, which must never wait on HubSpot: the contacts Cue already has for this domain (even a little old), and a
+    """For live notes, which must never wait on HubSpot: the contacts Overture already has for this domain (even a little old), and a
     background fetch when they are missing or old, ready for the next part of the note."""
     key = ("hubspot", "domain-contacts", domain)
     with CRM_LOCK:
@@ -5548,8 +5548,8 @@ def _domain_contacts_cached(domain):
 
 
 def _call_context(call_id, records, now, live=False):
-    """(events, the call's mention context with the companies Cue knows), or raises Invalid / GoogleError.
-    live: for live notes, HubSpot's contacts come from what Cue already has, never a request the note waits for."""
+    """(events, the call's mention context with the companies Overture knows), or raises Invalid / GoogleError.
+    live: for live notes, HubSpot's contacts come from what Overture already has, never a request the note waits for."""
     tok = token_info() or {}
     me = {"email": tok.get("email", ""), "name": tok.get("name", "")}
     events = fetch_events()
@@ -5570,7 +5570,7 @@ def mentions_post(body, now=None):
     The text is only used inside this function: it is never saved, logged or sent anywhere."""
     now = now or datetime.now(timezone.utc)
     if not token_info():
-        return 409, {"error": "Connect Google Calendar first, so Cue knows the call."}
+        return 409, {"error": "Connect Google Calendar first, so Overture knows the call."}
     try:
         c = clean_mentions_post(body)
         records = load_records()
@@ -5595,7 +5595,7 @@ def mentions_post(body, now=None):
     except Invalid as e:
         return 400, {"error": str(e)}
     except (GoogleError, NotConnected):
-        return 502, {"error": "Google Calendar didn't answer, so Cue can't check the call. Try again."}
+        return 502, {"error": "Google Calendar didn't answer, so Overture can't check the call. Try again."}
     _unqueue(unqueue)
     _queue_found(c["callId"], block, new, go, wait)
     out = mentions_body(c["callId"], ctx["met"], requeue=False)
@@ -5643,7 +5643,7 @@ def mentions_live(body, now=None):
     lookup dropped, unless you acted on it."""
     now = now or datetime.now(timezone.utc)
     if not token_info():
-        return 409, {"error": "Connect Google Calendar first, so Cue knows the call."}
+        return 409, {"error": "Connect Google Calendar first, so Overture knows the call."}
     if not mention_settings()["autoLookup"]:  # Settings > Mentions: off means nothing is read while you type
         return 403, {"error": "Automatic look-up is off in Settings > Mentions and connections."}
     try:
@@ -5697,7 +5697,7 @@ def mentions_live(body, now=None):
     except Invalid as e:
         return 400, {"error": str(e)}
     except (GoogleError, NotConnected):
-        return 502, {"error": "Google Calendar didn't answer, so Cue can't check the call. Try again."}
+        return 502, {"error": "Google Calendar didn't answer, so Overture can't check the call. Try again."}
     _unqueue(unqueue)
     _queue_found(cid, block, new, go, wait)
     out = mentions_body(cid, ctx["met"], requeue=False)
@@ -5723,7 +5723,7 @@ def clean_mention_action(body):
 
 
 def _set_removed(r, call_id, kind, x, removed):
-    """Take a wrong connection off the map (or put it back). Yours to decide: Cue never adds a removed one again."""
+    """Take a wrong connection off the map (or put it back). Yours to decide: Overture never adds a removed one again."""
     cid = connection_id(call_id, kind, x.get("key") or x["id"])
     gone = r.setdefault("connectionsRemoved", {})
     if removed:
@@ -5757,7 +5757,7 @@ def org_action(cid, block, it, action):
 
 def mention_action(body):
     """POST /api/mentions/pick: your answer for one mention. People: pick a candidate, confirm, none of these, look up again, add to
-    Cue records, remove or restore the connection. Companies: look up again, remove or restore the connection."""
+    Overture records, remove or restore the connection. Companies: look up again, remove or restore the connection."""
     try:
         cid, mid, action, idx = clean_mention_action(body)
         block = (load_records().get("mentions") or {}).get(cid) or {}
@@ -5772,7 +5772,7 @@ def mention_action(body):
             if blocker:
                 return (503, {"error": "no-key"}) if blocker.startswith("Add a Claude") else (400, {"error": blocker})
             if it.get("status") not in ("notfound", "pending", "pick", "nokey") and not it.get("autoFound"):
-                raise Invalid("Cue already knows who this is.")
+                raise Invalid("Overture already knows who this is.")
         err = {}
 
         def apply(x, r):
@@ -5797,7 +5797,7 @@ def mention_action(body):
                 x.update(status="pending", person=None, candidates=[], note="", autoFound=False, confirmed=False)
             elif action in ("remove", "restore"):
                 _set_removed(r, cid, "person", x, action == "remove")
-            else:  # add to Cue records: the next transcript knows them at once
+            else:  # add to Overture records: the next transcript knows them at once
                 p = x.get("person")
                 if st not in ("found", "known") or not isinstance(p, dict) or len(norm_name(p.get("name", "")).split()) < 2:
                     err["e"] = "Pick who this is first."
@@ -5852,7 +5852,7 @@ def mention_hubspot(body):
             raise Invalid("They're already a contact in HubSpot.")
         words = clean_text(p.get("name"), 100).split()
         if len(words) < 2:
-            raise Invalid("Cue needs their full name to add them to HubSpot.")
+            raise Invalid("Overture needs their full name to add them to HubSpot.")
         first, last, title = words[0], " ".join(words[1:]), clean_text(p.get("title"), 120)
         deadline = _time.time() + 15
         try:
@@ -5906,7 +5906,7 @@ def mention_hubspot(body):
 # ({"meeting_name", "created_at", "status": "recording" | "completed", ...}). The recordings folder is %USERPROFILE%\Music\
 # meetily-recordings on Windows (Documents\meetily-recordings without a Music folder). From src-tauri/src/audio/recording_saver.rs,
 # audio_processing.rs and recording_preferences.rs (main branch, release v0.4.1, checked Oct 21, 2026).
-# Cue only reads those two files. It never opens Meetily's database, never talks to Meetily or anything else over the network for
+# Overture only reads those two files. It never opens Meetily's database, never talks to Meetily or anything else over the network for
 # it, and never sends audio or the transcript anywhere: the lines stay in this process's memory while the call runs, and only each
 # mention and its sentence are saved. Untested against a real Meetily install: built from its source code, tested with fake folders.
 
@@ -6125,7 +6125,7 @@ def _meetily_read(folder, meta, final, now):
 
 
 def meetily_status(call_id=""):
-    """GET /api/meetily: is Cue listening through Meetily, and for which call. No transcript text, ever."""
+    """GET /api/meetily: is Overture listening through Meetily, and for which call. No transcript text, ever."""
     on = source_on("meetily")
     with MEETILY_LOCK:
         st = dict(MEETILY)
@@ -6137,7 +6137,7 @@ def meetily_status(call_id=""):
 
 
 def meetily_pick(body):
-    """POST /api/meetily/pick {callId}: the call the recording Meetily is making now belongs to (picked in the panel); "" lets Cue
+    """POST /api/meetily/pick {callId}: the call the recording Meetily is making now belongs to (picked in the panel); "" lets Overture
     match it by time. The pick holds for that recording only."""
     if not isinstance(body, dict) or set(body) != {"callId"} or not isinstance(body["callId"], str):
         return 400, {"error": "send {callId}"}
@@ -6155,7 +6155,7 @@ def meetily_pick(body):
 # (only ones with a finished summary); GET /v1/notes/{not_...}?include=transcript gives calendar_event (calendar_event_id,
 # scheduled_start_time, invitees), summary_text / summary_markdown, web_url and transcript [{speaker {source, attribution me|them,
 # name}, text, start_time, end_time}]; 413 means the transcript must be paged from GET /v1/notes/{id}/transcript (cursor).
-# The transcript is read in memory and dropped: Cue keeps the note's title, link and summary, and each mention with its sentence.
+# The transcript is read in memory and dropped: Overture keeps the note's title, link and summary, and each mention with its sentence.
 # Untested against a real account.
 
 GRANOLA_CHECK = 300           # look for finished calls' notes every 5 minutes
@@ -6254,7 +6254,7 @@ def granola_fetch(call_id, now=None, forced=False):
     if not granola_key():
         return 409, {"error": "Granola isn't connected. See Settings > Setup guides > After the call with Granola."}
     if not token_info():
-        return 409, {"error": "Connect Google Calendar first, so Cue knows the call."}
+        return 409, {"error": "Connect Google Calendar first, so Overture knows the call."}
     try:
         records = load_records()
         _events, ctx = _call_context(call_id, records, now)
@@ -6285,7 +6285,7 @@ def granola_fetch(call_id, now=None, forced=False):
     except Invalid as e:
         return 400, {"error": str(e)}
     except (GoogleError, NotConnected):
-        return 502, {"error": "Google Calendar didn't answer, so Cue can't check the call. Try again."}
+        return 502, {"error": "Google Calendar didn't answer, so Overture can't check the call. Try again."}
     _unqueue(unqueue)
     _queue_found(call_id, block, new, go, wait)
     out = mentions_body(call_id, ctx["met"], requeue=False)
@@ -6349,7 +6349,7 @@ def _sources_loop():
         for step in (meetily_step, granola_step):
             try:
                 step()
-            except Exception as e:  # the file or the API answered something Cue didn't expect
+            except Exception as e:  # the file or the API answered something Overture didn't expect
                 with MEETILY_LOCK:
                     if step is meetily_step:
                         MEETILY["error"] = "Meetily: " + type(e).__name__
@@ -6375,7 +6375,7 @@ def extension_id_from_key(key_b64):
 
 
 def extension_ids():
-    """Cue's Chrome extension (fixed by the "key" in extension/manifest.json), plus any ids in MOAB_EXTENSION_IDS."""
+    """Overture's Chrome extension (fixed by the "key" in extension/manifest.json), plus any ids in MOAB_EXTENSION_IDS."""
     out = []
     try:
         path = EXTENSION_DIR / "manifest.json"
@@ -6392,7 +6392,7 @@ def extension_ids():
 
 
 def frame_ancestors(raw_path):
-    """'self' everywhere; the in-call panel also lets Cue's extension frame it."""
+    """'self' everywhere; the in-call panel also lets Overture's extension frame it."""
     p = urllib.parse.unquote(urllib.parse.urlsplit(str(raw_path)).path).replace("\\", "/").lower()
     if p.rstrip("/").split("/")[-1] == "panel.html":
         return " ".join(["'self'"] + ["chrome-extension://" + i for i in extension_ids()])
@@ -6425,9 +6425,9 @@ def hidden_path(path):
     return any(seg.startswith(".") for seg in p.split("/") if seg)
 
 
-def page(title, message, link="/", link_text="Back to Cue"):
+def page(title, message, link="/", link_text="Back to Overture"):
     return ("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>"
-            + html_escape(title) + " · Cue</title><style>body{font:15px/1.5 system-ui,sans-serif;color:#1e1f21;background:#f6f5f4;margin:0;padding:48px 16px}"
+            + html_escape(title) + " · Overture</title><style>body{font:15px/1.5 system-ui,sans-serif;color:#1e1f21;background:#f6f5f4;margin:0;padding:48px 16px}"
             "main{max-width:480px;margin:0 auto;background:#fff;border:1px solid #edeae9;border-radius:16px;padding:28px}"
             "h1{font-size:20px;line-height:1.35;margin:0 0 8px}p{margin:0 0 16px;color:#48494b}a{color:#13773a;font-weight:500}</style><main><h1>"
             + html_escape(title) + "</h1><p>" + html_escape(message) + "</p><a href='" + html_escape(link) + "'>" + html_escape(link_text) + "</a></main>")
@@ -6440,8 +6440,8 @@ class Handler(SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        # Only Cue's own pages may frame Cue (the In-call page frames the panel). The in-call panel may also be framed by
-        # Cue's Chrome extension (its side panel), and by no other site.
+        # Only Overture's own pages may frame Overture (the In-call page frames the panel). The in-call panel may also be framed by
+        # Overture's Chrome extension (its side panel), and by no other site.
         self.send_header("Content-Security-Policy", "frame-ancestors " + frame_ancestors(getattr(self, "path", "") or ""))
         super().end_headers()
 
@@ -6538,7 +6538,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/auth/google":
             client = google_client()
             if not client:
-                return self.send_page(503, "Google sign-in isn't set up yet", "Follow the steps in docs/GOOGLE-SETUP.md (in Cue: Settings > Setup guides > Connect Google Calendar) to add your Google OAuth client, then restart server.py.")
+                return self.send_page(503, "Google sign-in isn't set up yet", "Follow the steps in docs/GOOGLE-SETUP.md (in Overture: Settings > Setup guides > Connect Google Calendar) to add your Google OAuth client, then restart server.py.")
             url, _ = new_auth_request(client[0])
             return self.redirect(url)
         if path == "/auth/google/callback":
@@ -6723,7 +6723,7 @@ def main(argv):
     st = status_body()
     g = "connected" if st["google"]["connected"] else "set up, not connected" if st["google"]["configured"] else "not set up"
     crm = "; ".join(SERVICE_NAMES[s] + (" set up" if st[s]["configured"] else " not set up") for s in SERVICE_NAMES)
-    print(f"Cue on http://localhost:{PORT}  (Google Calendar {g}; Claude {'on' if claude_on() else 'off'}; {crm})", flush=True)
+    print(f"Overture on http://localhost:{PORT}  (Google Calendar {g}; Claude {'on' if claude_on() else 'off'}; {crm})", flush=True)
     start_sources_loop()  # Meetily (when on in Settings) and Granola (when on and connected)
     server.serve_forever()
 
