@@ -1,4 +1,4 @@
-"""Save Huddle's HubSpot, Gong and Granola credentials on this PC, without pasting them into a browser or a chat.
+"""Save Cue's HubSpot, Gong and Granola credentials on this PC, without pasting them into a browser or a chat.
 
 Run:  tks-spotify/.venv/Scripts/python.exe -I tks-spotify/centralize/tools/connect.py [hubspot|gong|granola]
 
@@ -100,7 +100,7 @@ def main(argv):
     if which not in ("", "hubspot", "gong", "granola"):
         print(__doc__)
         return 2
-    print("Huddle: connect HubSpot, Gong and Granola. Secrets are saved only in " + str(DATA))
+    print("Cue: connect HubSpot, Gong and Granola. Secrets are saved only in " + str(DATA))
     if which in ("", "hubspot"):
         hubspot()
     if which in ("", "gong"):

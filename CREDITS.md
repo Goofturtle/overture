@@ -21,7 +21,7 @@ Pexels licence: https://www.pexels.com/license/
 
 ## Logo
 
-The Huddle bot logo (`logo.svg`, inline in the app) was drawn for this project.
+The Cue bot logo (`logo.svg`, inline in the app) was drawn for this project.
 
 ## Design references
 
