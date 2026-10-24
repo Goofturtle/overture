@@ -4508,20 +4508,20 @@ class SharedSite(ServerBase):
         self.assertEqual(self.req("GET", "/api/status", headers={"Host": "evil.example"})[0], 403)
 
     def test_each_account_sees_only_its_own_data(self):
-        a, b = self.sign_in("chris@spotify.com"), self.sign_in("arjun@example.org")
+        a, b = self.sign_in("chris@spotify.com"), self.sign_in("sam@example.org")
         st, txt, _ = self.hreq("PUT", "/api/records/company", {"name": "Acme", "status": "New lead"}, cookie=a, write=True)
         self.assertEqual(st, 200, txt)
         self.assertIn("Acme", self.hreq("GET", "/api/records", cookie=a)[1])
         self.assertNotIn("Acme", self.hreq("GET", "/api/records", cookie=b)[1])
         self.assertEqual(json.loads(self.hreq("GET", "/api/status", cookie=a)[1])["google"]["email"], "chris@spotify.com")
-        self.assertEqual(json.loads(self.hreq("GET", "/api/status", cookie=b)[1])["google"]["email"], "arjun@example.org")
+        self.assertEqual(json.loads(self.hreq("GET", "/api/status", cookie=b)[1])["google"]["email"], "sam@example.org")
         folder = Path(TMP) / "users" / S.account_id("chris@spotify.com")
         self.assertEqual(S.load_json(folder / "google-token.json", {})["access_token"], "AT-chris@spotify.com")
         self.assertFalse((Path(TMP) / "google-token.json").exists())  # nothing lands outside an account's folder
         self.assertNotIn(a, (Path(TMP) / "sessions.json").read_text(encoding="utf-8"))  # only hashes of the cookies are saved
 
     def test_sign_out_ends_the_session_on_every_device(self):
-        a, phone, other = self.sign_in("chris@spotify.com"), self.sign_in("chris@spotify.com"), self.sign_in("arjun@example.org")
+        a, phone, other = self.sign_in("chris@spotify.com"), self.sign_in("chris@spotify.com"), self.sign_in("sam@example.org")
         st, _, h = self.hreq("POST", "/auth/google/disconnect", {}, cookie=a, write=True)
         self.assertEqual(st, 200)
         self.assertIn("Max-Age=0", h["Set-Cookie"])
@@ -4536,7 +4536,7 @@ class SharedSite(ServerBase):
 
     def test_removed_account_is_signed_out(self):
         a = self.sign_in("chris@spotify.com")
-        os.environ["MOAB_ALLOWED"] = "arjun@example.org"
+        os.environ["MOAB_ALLOWED"] = "sam@example.org"
         self.assertEqual(self.hreq("GET", "/api/records", cookie=a)[0], 401)
 
     def test_environment_crm_keys_are_ignored_on_the_shared_site(self):
@@ -4549,9 +4549,9 @@ class SharedSite(ServerBase):
             os.environ.pop("HUBSPOT_TOKEN") if old is None else os.environ.__setitem__("HUBSPOT_TOKEN", old)
 
     def test_allowed_accounts(self):
-        os.environ["MOAB_ALLOWED"] = "@spotify.com, arjun@example.org"
+        os.environ["MOAB_ALLOWED"] = "@spotify.com, sam@example.org"
         self.assertTrue(S.account_allowed("Chris@Spotify.com"))
-        self.assertTrue(S.account_allowed("arjun@example.org"))
+        self.assertTrue(S.account_allowed("sam@example.org"))
         self.assertFalse(S.account_allowed("eve@evil.example"))
         self.assertFalse(S.account_allowed(""))
         st, txt, h = self.callback("eve@evil.example")
