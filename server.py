@@ -14,7 +14,11 @@ Run from anywhere:  tks-spotify/.venv/Scripts/python.exe tks-spotify/centralize/
 Secrets and tokens stay in .data/ (git-ignored) and are never logged or sent to the browser.
 """
 import base64
+import contextlib
+import contextvars
 import hashlib
+import hmac
+import http.cookies
 import json
 import os
 import re
@@ -32,7 +36,98 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-DATA_DIR = Path(os.environ.get("MOAB_DATA_DIR") or (HERE / ".data"))
+DATA_ROOT = Path(os.environ.get("MOAB_DATA_DIR") or (HERE / ".data"))
+# The shared site (MOAB_PUBLIC_URL, or the RENDER_EXTERNAL_URL Render sets): everyone signs in with Google and each account has
+# its own folder, .data/users/<account>, so one person's calendar, keys and notes are never another's. Unset: Overture on your own PC.
+PUBLIC_URL = (os.environ.get("MOAB_PUBLIC_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "").rstrip("/")
+HOSTED = bool(PUBLIC_URL)
+_USER = contextvars.ContextVar("moab_user", default=None)  # the signed-in account this request or lookup is for
+
+
+class NoUser(Exception):
+    """Something reached for an account's data with no account signed in (on the shared site that is never allowed)."""
+
+
+def own_env(name):
+    """A key from this server's environment, for MOAB on your own PC only: on the shared site an environment key would be
+    every account's, so each account saves its own instead."""
+    return None if HOSTED else os.environ.get(name)
+
+
+def current_user():
+    uid = _USER.get()
+    if HOSTED and not uid:
+        raise NoUser()
+    return uid or ""
+
+
+@contextlib.contextmanager
+def as_user(uid):
+    tok = _USER.set(uid)
+    try:
+        yield
+    finally:
+        _USER.reset(tok)
+
+
+class _UserDir:
+    """DATA_DIR: .data on your own PC; .data/users/<account> on the shared site, for the account signed in right now."""
+    def _p(self):
+        uid = current_user()
+        return DATA_ROOT / "users" / uid if uid else DATA_ROOT
+
+    def __truediv__(self, name):
+        return self._p() / name
+
+    def __fspath__(self):
+        return str(self._p())
+
+    def __str__(self):
+        return str(self._p())
+
+    def __getattr__(self, name):
+        return getattr(self._p(), name)
+
+
+class PerUser:
+    """A cache or state dict (or set) kept once per account on the shared site; just once on your own PC."""
+    def __init__(self, make):
+        self._make, self._by = make, {}
+
+    def _d(self):
+        uid = current_user()
+        d = self._by.get(uid)
+        return d if d is not None else self._by.setdefault(uid, self._make())
+
+    def users(self):
+        return list(self._by)
+
+    def __getattr__(self, name):
+        return getattr(self._d(), name)
+
+    def __getitem__(self, k):
+        return self._d()[k]
+
+    def __setitem__(self, k, v):
+        self._d()[k] = v
+
+    def __delitem__(self, k):
+        del self._d()[k]
+
+    def __contains__(self, k):
+        return k in self._d()
+
+    def __iter__(self):
+        return iter(self._d())
+
+    def __len__(self):
+        return len(self._d())
+
+    def __bool__(self):
+        return bool(self._d())
+
+
+DATA_DIR = _UserDir()
 PORT = 3576
 MODEL = "claude-opus-5-5"
 SCOPES = "openid email profile https://www.googleapis.com/auth/calendar.readonly"
@@ -111,22 +206,22 @@ def port():
 
 
 def allowed_hosts():
-    return {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
+    return {f"127.0.0.1:{PORT}", f"localhost:{PORT}"} | ({urllib.parse.urlsplit(PUBLIC_URL).netloc} if HOSTED else set())
 
 
 def allowed_origins():
-    return {f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}"}
+    return {f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}"} | ({PUBLIC_URL} if HOSTED else set())
 
 
 def redirect_uri():
-    return f"http://localhost:{PORT}/auth/google/callback"
+    return (PUBLIC_URL if HOSTED else f"http://localhost:{PORT}") + "/auth/google/callback"
 
 
 # ---------------------------------------------------------------- files ----------------------------------------------------------------
 
 def ensure_data_dir():
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    ignore = DATA_DIR / ".gitignore"
+    DATA_ROOT.mkdir(parents=True, exist_ok=True)
+    ignore = DATA_ROOT / ".gitignore"
     if not ignore.exists():
         ignore.write_text("*\n", encoding="utf-8")
 
@@ -142,9 +237,84 @@ def save_json(path, obj):
     """Write atomically: a temp file next to the target, then one rename."""
     ensure_data_dir()
     path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + "." + secrets.token_hex(4) + ".tmp")
-    tmp.write_text(json.dumps(obj, indent=1, ensure_ascii=False), encoding="utf-8")
+    text = json.dumps(obj, indent=1, ensure_ascii=False)
+    tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, path)
+    db_saved(path, text)
+
+
+def remove_file(path):
+    """Delete a saved file (and the shared site's copy of it). Already gone is fine."""
+    try:
+        Path(path).unlink()
+    except OSError:
+        pass
+    db_deleted(path)
+
+
+# The shared site's disk is wiped whenever Render puts it to sleep, so there every file saved under .data is also kept in
+# Postgres (DATABASE_URL) and written back when the server starts. Reads stay on the disk. Unset (your own PC): disk only.
+DB = {"conn": None}
+DB_LOCK = threading.Lock()
+
+
+def db_on():
+    return bool(os.environ.get("DATABASE_URL"))
+
+
+def _db_key(path):
+    return Path(path).resolve().relative_to(DATA_ROOT.resolve()).as_posix()
+
+
+def _db_run(sql, args=(), must=False):
+    """Run one statement. A failure is logged and skipped, or raised when must (the restore at start)."""
+    with DB_LOCK:
+        for attempt in (1, 2):  # once more on a fresh connection: Render's Postgres drops idle ones
+            try:
+                if DB["conn"] is None or DB["conn"].closed:
+                    import psycopg
+                    DB["conn"] = psycopg.connect(os.environ["DATABASE_URL"], autocommit=True, connect_timeout=5)
+                    DB["conn"].execute("CREATE TABLE IF NOT EXISTS moab_files (path text PRIMARY KEY, body text NOT NULL, "
+                                       "saved_at timestamptz NOT NULL DEFAULT now())")
+                cur = DB["conn"].execute(sql, args)
+                return cur.fetchall() if cur.description else []
+            except Exception as e:
+                DB["conn"] = None
+                if attempt == 2:
+                    if must:
+                        raise
+                    where = (args[0] if args else "")
+                    print(f"[db] {type(e).__name__}: {sql.split()[0]} {where} did not reach Postgres; it is lost when the server "
+                          "sleeps unless it is saved again", flush=True)
+                    return []
+
+
+def db_saved(path, text):
+    if db_on():
+        _db_run("INSERT INTO moab_files (path, body) VALUES (%s, %s) ON CONFLICT (path) DO UPDATE SET body = EXCLUDED.body, "
+                "saved_at = now()", (_db_key(path), text))
+
+
+def db_deleted(path):
+    if db_on():
+        _db_run("DELETE FROM moab_files WHERE path = %s", (_db_key(path),))
+
+
+def db_restore():
+    """At start: write every saved file back under .data (never outside it). Returns how many."""
+    if not db_on():
+        return 0
+    root, n = DATA_ROOT.resolve(), 0
+    for rel, body in _db_run("SELECT path, body FROM moab_files", must=True):  # unreachable: raise, never start empty
+        dest = (root / rel).resolve()
+        if root not in dest.parents:
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(body, encoding="utf-8")
+        n += 1
+    return n
 
 
 def token_path():
@@ -162,7 +332,7 @@ def google_client():
     cid, secret = os.environ.get("GOOGLE_CLIENT_ID"), os.environ.get("GOOGLE_CLIENT_SECRET")
     if cid and secret:
         return cid, secret
-    j = load_json(DATA_DIR / "google-client.json", None)
+    j = load_json(DATA_ROOT / "google-client.json", None)  # the app's, not an account's
     if isinstance(j, dict):
         block = j.get("web") or j.get("installed") or {}
         if block.get("client_id") and block.get("client_secret"):
@@ -253,7 +423,7 @@ def new_auth_request(client_id, now=None):
     with PENDING_LOCK:
         for k in [k for k, (_, exp) in PENDING.items() if exp <= now]:
             del PENDING[k]
-        while len(PENDING) >= 50:  # never grows without bound
+        while len(PENDING) >= (2000 if HOSTED else 50):  # never grows without bound
             PENDING.pop(next(iter(PENDING)))
         PENDING[state] = (verifier, now + STATE_TTL)
     q = {
@@ -296,13 +466,93 @@ def exchange_code(code, verifier):
         "expires_at": int(_time.time()) + int(j.get("expires_in", 3600)), "scope": j.get("scope", ""),
         "email": str(me.get("email", "")), "name": str(me.get("name", "")),
     }
-    old = load_json(token_path(), {})
-    if not tok["refresh_token"] and old.get("refresh_token"):  # Google only sends it on first consent
-        tok["refresh_token"] = old["refresh_token"]
-    with TOKEN_LOCK:
-        save_json(token_path(), tok)
-    clear_cache()
+    if HOSTED and not account_allowed(tok["email"]):
+        raise GoogleError("This Google account can't use this Overture. Ask the person who runs it to add you.", 403, "not_allowed")
+    with as_user(account_id(tok["email"])) if HOSTED else contextlib.nullcontext():
+        old = load_json(token_path(), {})
+        if not tok["refresh_token"] and old.get("refresh_token"):  # Google only sends it on first consent
+            tok["refresh_token"] = old["refresh_token"]
+        with TOKEN_LOCK:
+            save_json(token_path(), tok)
+        clear_cache()
     return tok
+
+
+# ---------------------------------------------------------------- accounts (the shared site) ----------------------------------------------------------------
+
+SESSION_COOKIE = "overture_session"
+OAUTH_COOKIE = "overture_signin"  # the sign-in this browser started (its OAuth state), checked when Google sends it back
+SESSION_DAYS = 30
+SESSIONS_LOCK = threading.Lock()
+SIGNED_OUT = "signed-out"  # where a signed-out visitor's status is read: no account id looks like this
+
+
+def account_id(email):
+    return hashlib.sha256(email.strip().lower().encode("utf-8")).hexdigest()[:24]
+
+
+def account_allowed(email):
+    """MOAB_ALLOWED (emails or @domains, comma-separated) limits who may sign in. Unset: anyone Google lets through (while the
+    Google app is in Testing, only its test users)."""
+    allow = [a.strip().lower() for a in os.environ.get("MOAB_ALLOWED", "").split(",") if a.strip()]
+    e = email.strip().lower()
+    return bool(e) and (not allow or e in allow or any(a.startswith("@") and e.endswith(a) for a in allow))
+
+
+def sessions_path():
+    return DATA_ROOT / "sessions.json"
+
+
+def _sid_key(sid):
+    return hashlib.sha256(sid.encode("utf-8")).hexdigest()  # only a hash is saved, so the saved file can't sign anyone in
+
+
+def new_session(email, now=None):
+    now = _time.time() if now is None else now
+    sid = secrets.token_urlsafe(32)
+    with SESSIONS_LOCK:
+        s = {k: v for k, v in load_json(sessions_path(), {}).items() if isinstance(v, dict) and v.get("exp", 0) > now}
+        s[_sid_key(sid)] = {"uid": account_id(email), "email": email, "exp": now + SESSION_DAYS * 86400}
+        save_json(sessions_path(), s)
+    return sid
+
+
+def _cookie_value(headers, name):
+    c = http.cookies.SimpleCookie()
+    try:
+        c.load(headers.get("Cookie") or "")
+    except http.cookies.CookieError:
+        return ""
+    m = c.get(name)
+    return m.value if m else ""
+
+
+def _cookie_sid(headers):
+    return _cookie_value(headers, SESSION_COOKIE)
+
+
+def session_user(headers, now=None):
+    """The account this browser is signed in as, or None."""
+    sid = _cookie_sid(headers)
+    if not sid:
+        return None
+    v = load_json(sessions_path(), {}).get(_sid_key(sid))  # no lock: saves replace the file in one step
+    now = _time.time() if now is None else now
+    ok = isinstance(v, dict) and v.get("exp", 0) > now and isinstance(v.get("uid"), str) and account_allowed(str(v.get("email", "")))
+    return v["uid"] if ok else None
+
+
+def end_sessions(uid):
+    """Sign an account out everywhere (every browser and device)."""
+    with SESSIONS_LOCK:
+        s = load_json(sessions_path(), {})
+        keep = {k: v for k, v in s.items() if not (isinstance(v, dict) and v.get("uid") == uid)}
+        if len(keep) != len(s):
+            save_json(sessions_path(), keep)
+
+
+def session_cookie(sid, days=SESSION_DAYS):
+    return f"{SESSION_COOKIE}={sid}; Path=/; Max-Age={days * 86400}; HttpOnly; Secure; SameSite=Lax"
 
 
 def token_info():
@@ -329,10 +579,7 @@ def access_token(force_refresh=False):
         })
         if status != 200 or not j.get("access_token"):
             if j.get("error") == "invalid_grant":  # revoked or expired for good: forget it
-                try:
-                    token_path().unlink()
-                except OSError:
-                    pass
+                remove_file(token_path())
                 raise GoogleError("Google ended the connection. Connect again.", 401, "invalid_grant")
             raise GoogleError("could not refresh the Google sign-in (" + str(j.get("error") or status) + ")", status)
         tok["access_token"] = j["access_token"]
@@ -349,16 +596,13 @@ def disconnect():
             HTTP("POST", REVOKE_URL, form={"token": t})
         except GoogleError:
             pass  # still forget it locally
-    try:
-        token_path().unlink()
-    except OSError:
-        pass
+    remove_file(token_path())
     clear_cache()
 
 
 # ---------------------------------------------------------------- calendar ----------------------------------------------------------------
 
-CACHE = {"at": 0.0, "events": None}
+CACHE = PerUser(lambda: {"at": 0.0, "events": None})
 CACHE_LOCK = threading.Lock()
 
 
@@ -614,7 +858,7 @@ def _others(ev, me_email):
         email = str(a.get("email", "")).strip().lower()
         if not email or a.get("self") or email == me_email or a.get("resource") or email.endswith("calendar.google.com"):
             continue
-        # No name on the invite: the full name written in the event itself ("Call with Shea Tough") beats the email's first word.
+        # No name on the invite: the full name written in the event itself ("Call with Shea Kim") beats the email's first word.
         named = str(a.get("displayName") or "").strip() or name_from_event(email, {"title": ev.get("summary"), "notes": plain_text(ev.get("description"))})
         out.append({"name": named or name_from_email(email), "email": email})
     return out
@@ -883,6 +1127,7 @@ def script_json(obj):
 def status_body():
     tok = token_info()
     return {
+        "hosted": HOSTED,  # the shared site: the page says your data stays in your account, not on this PC
         "claude": claude_on(),  # kept for older pages
         "google": {"configured": bool(google_client()), "connected": bool(tok), "email": (tok or {}).get("email", "")},
         "ai": {"claude": claude_on()},
@@ -1357,7 +1602,7 @@ def save_settings(body):
     return out
 
 
-_SETTINGS_CACHE = {}
+_SETTINGS_CACHE = PerUser(dict)
 
 
 def app_settings():
@@ -1808,7 +2053,7 @@ ORG_RESEARCH_SYSTEM = (
 # One queue for every lookup. Jobs: a guest's email (invitee research), "co:<domain>" (company research, like invitee research
 # it never takes the last free worker), "mention:<call>:<id>" (someone said on a call) and
 # "org:<call>:<id>" (how a company said on a call relates to the call's company). running: the keys being looked up right now.
-RQ = {"queue": [], "pending": set(), "running": set(), "errors": {}, "meta": {}, "mentions": {}}  # mentions: key -> job
+RQ = PerUser(lambda: {"queue": [], "pending": set(), "running": set(), "errors": {}, "meta": {}, "mentions": {}})  # mentions: key -> job
 RQ_LOCK = threading.Condition()
 RESEARCH_AUTOSTART = True   # tests turn this off and call research_step() themselves
 MAX_WORKERS = 3             # lookups at once; things said on a call go before invitee research
@@ -2115,12 +2360,27 @@ def ensure_worker():
         _WORKER["threads"] = alive
 
 
+def _ready_user():
+    """Under RQ_LOCK: an account with a lookup a worker may take now, or None (on your own PC there is only you)."""
+    users = [u for u in RQ.users() if u] if HOSTED else [""]
+    _WORKER["turn"] = _WORKER.get("turn", 0) + 1  # start with a different account each time, so one account can't hold every worker
+    for i in range(len(users)):
+        uid = users[(_WORKER["turn"] + i) % len(users)]
+        with as_user(uid):
+            if _job_ready():
+                return uid
+    return None
+
+
 def _worker_loop():
     while True:  # for the life of the server
         with RQ_LOCK:
-            while not _job_ready() or not RESEARCH_AUTOSTART:  # tests turn autostart off and step the queue themselves
+            uid = _ready_user() if RESEARCH_AUTOSTART else None  # tests turn autostart off and step the queue themselves
+            while uid is None:
                 RQ_LOCK.wait(1.0)
-        research_step()
+                uid = _ready_user() if RESEARCH_AUTOSTART else None
+        with as_user(uid):  # the lookup reads and saves only that account's records
+            research_step()
 
 
 def _said_job(key):
@@ -2442,7 +2702,7 @@ def _run_search(req, budget, resumes, responses):
     return stop, text, seen
 
 
-USAGE = {"lookups": 0, "input": 0, "output": 0}  # Claude tokens research used since the server started
+USAGE = PerUser(lambda: {"lookups": 0, "input": 0, "output": 0})  # Claude tokens research used since the server started
 
 
 def log_usage(responses):
@@ -2890,7 +3150,7 @@ SLEEP = _time.sleep     # and this, so the 429 backoff doesn't slow them down
 def hubspot_token():
     """The private app access token from HUBSPOT_TOKEN or .data/hubspot.json, else None."""
     j = load_json(DATA_DIR / "hubspot.json", {})
-    t = os.environ.get("HUBSPOT_TOKEN") or (j.get("token") if isinstance(j, dict) else None)
+    t = own_env("HUBSPOT_TOKEN") or (j.get("token") if isinstance(j, dict) else None)
     return t.strip() if isinstance(t, str) and t.strip() else None
 
 
@@ -2898,8 +3158,8 @@ def gong_keys():
     """(access key, secret, base URL) from GONG_ACCESS_KEY / GONG_ACCESS_SECRET / GONG_BASE_URL or .data/gong.json, else None."""
     j = load_json(DATA_DIR / "gong.json", {})
     j = j if isinstance(j, dict) else {}
-    key = os.environ.get("GONG_ACCESS_KEY") or j.get("access_key")
-    secret = os.environ.get("GONG_ACCESS_SECRET") or j.get("access_secret")
+    key = own_env("GONG_ACCESS_KEY") or j.get("access_key")
+    secret = own_env("GONG_ACCESS_SECRET") or j.get("access_secret")
     base = os.environ.get("GONG_BASE_URL") or j.get("base_url") or GONG_DEFAULT_BASE
     if not (isinstance(key, str) and key.strip() and isinstance(secret, str) and secret.strip()):
         return None
@@ -2912,7 +3172,7 @@ GRANOLA_API = "https://public-api.granola.ai"
 def granola_key():
     """Your Granola personal API key from GRANOLA_API_KEY or .data/granola.json, else None."""
     j = load_json(DATA_DIR / "granola.json", {})
-    k = os.environ.get("GRANOLA_API_KEY") or (j.get("api_key") if isinstance(j, dict) else None)
+    k = own_env("GRANOLA_API_KEY") or (j.get("api_key") if isinstance(j, dict) else None)
     return k.strip() if isinstance(k, str) and k.strip() else None
 
 
@@ -2932,8 +3192,8 @@ def crm_configured(service):
     return bool(hubspot_token() if service == "hubspot" else gong_keys())
 
 
-CRM_STATE = {s: {"lastSync": "", "lastError": "", "pausedUntil": 0.0, "checkedAt": 0.0, "account": ""} for s in list(SERVICE_NAMES) + ["granola"]}
-CRM_CACHE = {}          # key -> (saved at, value)
+CRM_STATE = PerUser(lambda: {s: {"lastSync": "", "lastError": "", "pausedUntil": 0.0, "checkedAt": 0.0, "account": ""} for s in list(SERVICE_NAMES) + ["granola"]})
+CRM_CACHE = PerUser(dict)  # key -> (saved at, value)
 CRM_LOCK = threading.Lock()
 
 
@@ -4091,7 +4351,7 @@ WAIT_SECONDS = 30            # a company with no explanation yet: wait this long
 LOOKUP_BUDGET = 20           # seconds per web lookup for a mention or a company relation
 LOOKUP_SEARCHES = 3          # web searches per lookup at most
 CACHE_DAYS = 7
-LOOKUP_CACHE = {}            # ("person", name, role, company) or ("org", company A, company B) -> (saved at, result)
+LOOKUP_CACHE = PerUser(dict)  # ("person", name, role, company) or ("org", company A, company B) -> (saved at, result)
 LOOKUP_CACHE_LOCK = threading.Lock()
 
 
@@ -4570,7 +4830,7 @@ def promote_waiting(now=None):
 def _wait_timer(call_id, oid, seconds):
     if not RESEARCH_AUTOSTART:
         return  # tests call promote_waiting themselves
-    t = threading.Timer(seconds + 0.2, lambda: start_org_lookup(call_id, oid))
+    t = threading.Timer(seconds + 0.2, contextvars.copy_context().run, args=(start_org_lookup, call_id, oid))
     t.daemon = True
     t.start()
 
@@ -5523,7 +5783,7 @@ def _domain_contacts(domain):
     return []
 
 
-HS_WARMING = set()           # domains whose HubSpot contacts are being fetched in the background for live notes
+HS_WARMING = PerUser(set)    # domains whose HubSpot contacts are being fetched in the background for live notes
 
 
 def _domain_contacts_cached(domain):
@@ -5543,7 +5803,7 @@ def _domain_contacts_cached(domain):
             with CRM_LOCK:
                 HS_WARMING.discard(domain)
     if fetch:
-        threading.Thread(target=fill, name="moab-hubspot-contacts", daemon=True).start()
+        threading.Thread(target=contextvars.copy_context().run, args=(fill,), name="moab-hubspot-contacts", daemon=True).start()
     return list(hit[1]) if hit and isinstance(hit[1], list) else []
 
 
@@ -5608,7 +5868,7 @@ def mentions_post(body, now=None):
 # never on disk, and drops it when you save the note, switch calls, or after 10 minutes without a change (the panel then sends
 # the whole note again). Names are found while the call is running.
 
-LIVE_SEGMENTS = {}          # (call id, segment id) -> {"text", "at", "keys": the mentions this note added}
+LIVE_SEGMENTS = PerUser(dict)  # (call id, segment id) -> {"text", "at", "keys": the mentions this note added}
 LIVE_LOCK = threading.Lock()
 LIVE_MAX_CHARS = 8000
 LIVE_TTL = 10 * 60
@@ -5918,7 +6178,8 @@ MEETILY_PIN_HOURS = 4           # a call picked in the panel stays picked this l
 MEETILY_MAX_BYTES = 8_000_000
 MEETILY_AUTOSTART = True        # tests turn this off and call meetily_step() themselves
 MEETILY_LOCK = threading.Lock()
-MEETILY = {}
+MEETILY = PerUser(lambda: dict(folder="", mtime=None, seqs={}, lines=[], callId="", lastLineAt=0.0, recording=False, error="",
+                               pinned="", pinnedAt=0.0, pinnedFolder="", name=""))
 
 
 def meetily_reset(keep_pin=True):
@@ -5928,8 +6189,6 @@ def meetily_reset(keep_pin=True):
         MEETILY.update(folder="", mtime=None, seqs={}, lines=[], callId="", lastLineAt=0.0, recording=False, error="",
                        pinned=pin[0], pinnedAt=pin[1], pinnedFolder=pin[2], name="")
 
-
-meetily_reset(False)
 
 
 def _known_music_folder():
@@ -6163,7 +6422,7 @@ GRANOLA_AFTER = 5 * 60        # Granola needs a few minutes after a call to writ
 GRANOLA_WINDOW = 24 * 3600    # calls that ended in the last day
 GRANOLA_RETRY = 30 * 60       # no note yet: look again in 30 minutes
 GRANOLA_MATCH = 20 * 60       # a note whose calendar event starts within 20 minutes of the call (and shares a guest or the title)
-GRANOLA_STATE = {"checkedAt": 0.0}
+GRANOLA_STATE = PerUser(lambda: {"checkedAt": 0.0})
 
 
 def _granola_get(path, deadline):
@@ -6482,11 +6741,36 @@ class Handler(SimpleHTTPRequestHandler):
     def route_path(self):
         return urllib.parse.urlsplit(self.path).path
 
+    def parse_request(self):
+        _USER.set(None)  # every request on a kept-alive connection says again who it is for
+        ok = super().parse_request()
+        if ok and HOSTED:
+            _USER.set(session_user(self.headers))
+        return ok
+
+    def signed_out(self):
+        """The shared site: an account's routes need that account signed in. True (and the answer sent) when nobody is."""
+        if not HOSTED or _USER.get():
+            return False
+        path = self.route_path()
+        if path in ("/data/live.js", "/api/status"):
+            with as_user(SIGNED_OUT):  # the connect screen: Google is set up, nothing is connected
+                st = status_body()
+            if path == "/api/status":
+                self.send_json(200, st)
+            else:
+                self.send_body(200, ("window.MOAB_STATUS = " + script_json(st) + ";\nwindow.MOAB_LIVE = null;\n").encode("utf-8"), "text/javascript")
+            return True
+        if path.startswith("/api/") or path == "/auth/google/disconnect":
+            self.send_json(401, {"error": "sign in first"})
+            return True
+        return False
+
     def translate_path(self, path):
         """Never map a URL onto .data or another dot folder, however it is spelled (Windows also calls .data DATA~1)."""
         p = super().translate_path(path)
         real, root = os.path.normcase(os.path.realpath(p)), os.path.normcase(os.path.realpath(self.directory))
-        data = os.path.normcase(os.path.realpath(DATA_DIR))
+        data = os.path.normcase(os.path.realpath(DATA_ROOT))
         inside = real[len(root):].split(os.sep) if real.startswith(root + os.sep) else []
         if real == data or real.startswith(data + os.sep) or any(seg.startswith(".") for seg in inside):
             return os.path.join(self.directory, "__no_such_file__")
@@ -6497,6 +6781,8 @@ class Handler(SimpleHTTPRequestHandler):
         if not self.path.startswith("/") or not host_ok(self.headers):
             return self.send_json(403, {"error": "not allowed"})
         path = self.route_path()
+        if self.signed_out():
+            return None
         if hidden_path(path):  # .data holds the Google client secret, tokens and records: never served as files
             return self.send_json(404, {"error": "not found"})
         if path == "/api/status":
@@ -6539,7 +6825,10 @@ class Handler(SimpleHTTPRequestHandler):
             client = google_client()
             if not client:
                 return self.send_page(503, "Google sign-in isn't set up yet", "Follow the steps in docs/GOOGLE-SETUP.md (in Overture: Settings > Setup guides > Connect Google Calendar) to add your Google OAuth client, then restart server.py.")
-            url, _ = new_auth_request(client[0])
+            url, state = new_auth_request(client[0])
+            if HOSTED:  # the callback must come back to this same browser, so nobody can sign you in as them
+                return self.send_body(302, b"", "text/plain", {"Location": url, "Set-Cookie": OAUTH_COOKIE + "=" + state +
+                                      "; Path=/auth/google/callback; Max-Age=" + str(STATE_TTL) + "; HttpOnly; Secure; SameSite=Lax"})
             return self.redirect(url)
         if path == "/auth/google/callback":
             return self.oauth_callback()
@@ -6555,6 +6844,8 @@ class Handler(SimpleHTTPRequestHandler):
 
     def oauth_callback(self):
         q = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(self.path).query))
+        if HOSTED and not hmac.compare_digest(_cookie_value(self.headers, OAUTH_COOKIE), str(q.get("state") or "")):
+            return self.send_page(400, "Sign-in expired", "That sign-in didn't start in this browser. Press Connect Google Calendar again.")
         verifier = take_state(q.get("state"))
         if q.get("error"):
             msg = "You didn't allow access, so nothing was connected." if q["error"] == "access_denied" else "Google stopped the sign-in (" + q["error"][:60] + ")."
@@ -6564,13 +6855,18 @@ class Handler(SimpleHTTPRequestHandler):
         if not q.get("code"):
             return self.send_page(400, "Not connected", "Google sent no sign-in code. Try again.")
         try:
-            exchange_code(q["code"], verifier)
+            tok = exchange_code(q["code"], verifier)
         except GoogleError as e:
             return self.send_page(400, "Not connected", str(e))
+        if HOSTED:  # signed in: this browser now opens this Google account's own Overture
+            sid = new_session(tok["email"])
+            return self.send_body(302, b"", "text/plain", {"Location": "/#/home", "Set-Cookie": session_cookie(sid)})
         return self.redirect("/#/home")
 
     def do_PUT(self):
         path = self.route_path()
+        if self.signed_out():
+            return None
         if path == "/api/settings":
             # Settings: only from this page (X-MOAB + our Origin), JSON only, at most 64 KB, every value checked (save_settings).
             if not write_guard_ok(self.headers) or self.headers.get_content_type() != "application/json":
@@ -6617,13 +6913,12 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         path = self.route_path()
+        if self.signed_out():
+            return None
         if path == "/api/claude-key/remove":
             if not write_guard_ok(self.headers):
                 return self.send_json(403, {"error": "not allowed"})
-            try:
-                claude_key_path().unlink()
-            except FileNotFoundError:
-                pass
+            remove_file(claude_key_path())
             return self.send_json(200, dict(claude_key_state(), ok=True))
         if path == "/api/records/apply":
             return self.handle_write("apply")
@@ -6631,6 +6926,9 @@ class Handler(SimpleHTTPRequestHandler):
             if not write_guard_ok(self.headers):
                 return self.send_json(403, {"error": "not allowed"})
             disconnect()
+            if HOSTED:  # signing out of the shared site also ends this browser's session
+                end_sessions(_USER.get())
+                return self.send_body(200, b'{"ok": true}', "application/json", {"Set-Cookie": session_cookie("", 0)})
             return self.send_json(200, {"ok": True})
         if path == "/api/research":
             if not write_guard_ok(self.headers) or self.headers.get_content_type() != "application/json":
@@ -6718,7 +7016,18 @@ def main(argv):
         PORT = int(argv[argv.index("--port") + 1])
     elif os.environ.get("MOAB_PORT"):
         PORT = int(os.environ["MOAB_PORT"])
+    elif HOSTED and os.environ.get("PORT"):  # Render says which port to listen on
+        PORT = int(os.environ["PORT"])
     ensure_data_dir()
+    if HOSTED:
+        try:
+            n = db_restore()
+        except Exception as e:  # serving from an empty disk would overwrite the saved copy: stop, Render starts it again
+            sys.exit(f"[db] {type(e).__name__}: could not read the saved files from Postgres, so Overture did not start")
+        server = ThreadingHTTPServer(("0.0.0.0", PORT), partial(Handler, directory=str(HERE)))
+        print(f"Overture shared site {PUBLIC_URL} on port {PORT} ({n} saved files restored; Google sign-in "
+              f"{'set up' if google_client() else 'NOT set up: add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET'})", flush=True)
+        return server.serve_forever()  # Meetily and Granola read files on your own PC, so the shared site doesn't poll them
     server = ThreadingHTTPServer(("127.0.0.1", PORT), partial(Handler, directory=str(HERE)))
     st = status_body()
     g = "connected" if st["google"]["connected"] else "set up, not connected" if st["google"]["configured"] else "not set up"

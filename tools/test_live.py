@@ -635,8 +635,8 @@ class Research(Fresh):
             for n, line in enumerate((root / "docs" / f).read_text(encoding="utf-8").splitlines(), 1):
                 self.assertFalse(re.match(r"^\s*\|", line) or line.startswith("####"), f + ":" + str(n) + " can't be drawn: " + line)
         e = ev("h1", "2026-10-22T19:15:00+00:00", 25, [SELF, att("shea@tks.world")], summary="Prototype review")
-        e["description"] = "<p>Her name is <b>Shea&nbsp;Tough</b>.</p>"
-        self.assertEqual([a["name"] for a in S._others(e, ME["email"])], ["Shea Tough"])
+        e["description"] = "<p>Her name is <b>Shea&nbsp;Kim</b>.</p>"
+        self.assertEqual([a["name"] for a in S._others(e, ME["email"])], ["Shea Kim"])
 
     def test_people_she_is_publicly_connected_with_are_kept_only_with_a_source(self):
         seen = {S.url_key("https://www.tks.world/team"): {"cited": [], "age": ""}}
@@ -645,10 +645,10 @@ class Research(Fresh):
                "summary": {"text": "Director at TKS.", "sources": [1]},
                "people": [{"name": "Navid Nathoo", "role": "Co-founder", "org": "TKS", "how": "Leads TKS, where she is a director.", "sources": [1]},
                           {"name": "Pat Lee", "how": "Named with her on a page Overture never saw.", "sources": [2]},
-                          {"name": "Sam Tough", "how": "Her husband.", "sources": [1]},
+                          {"name": "Sam Kim", "how": "Her husband.", "sources": [1]},
                           {"name": "the team", "how": "Worked together.", "sources": [1]},
                           {"name": "Navid Nathoo", "how": "Again.", "sources": [1]}]}
-        prof = S.clean_profile(obj, seen, "person", "Shea Tough")
+        prof = S.clean_profile(obj, seen, "person", "Shea Kim")
         self.assertEqual([p["name"] for p in prof["people"]], ["Navid Nathoo"])
         self.assertEqual(prof["people"][0]["src"], [0])
         self.assertEqual([p["name"] for p in S.profile_view(prof, "person")["people"]], ["Navid Nathoo"])
@@ -965,7 +965,7 @@ def deep_reply(answer, searched=(), fetched=(), asked=None, failed=(), stop="end
     return SimpleNamespace(stop_reason=stop, content=content, container=container)
 
 
-TKS_TEAM, SHEA_PROFILE, SHEA_TALK = "https://tks.world/team", "https://www.linkedin.com/in/shea-tough", "https://events.example.org/talks/shea"
+TKS_TEAM, SHEA_PROFILE, SHEA_TALK = "https://tks.world/team", "https://www.linkedin.com/in/shea-kim", "https://events.example.org/talks/shea"
 SHEA = {
     "found": True, "confidence": "high", "title": "Director, Program Success", "team": "Program Success", "seniority": "director",
     "tenure": "", "relationship": "employee",
@@ -973,9 +973,9 @@ SHEA = {
         {"url": TKS_TEAM, "label": "TKS team page", "supports": ["title", "team", "relationship"]},   # 1: in the search results
         {"url": SHEA_PROFILE, "label": "Professional profile", "supports": ["seniority"]},       # 2: opened by web fetch
         {"url": "https://never-seen.example.com/bio", "label": "Made up", "supports": []},       # 3: never returned
-        {"url": "https://www.zoominfo.com/p/shea-tough", "label": "ZoomInfo", "supports": []},   # 4: a blocked site
+        {"url": "https://www.zoominfo.com/p/shea-kim", "label": "ZoomInfo", "supports": []},   # 4: a blocked site
         {"url": SHEA_TALK, "label": "Summit talk", "supports": []}],                             # 5: in the search results
-    "summary": {"text": "Shea Tough leads Program Success at The Knowledge Society.", "sources": [1]},
+    "summary": {"text": "Shea Kim leads Program Success at The Knowledge Society.", "sources": [1]},
     "now": [{"text": "Runs the team that supports students through TKS programs.", "sources": [1, 2]},
             {"text": "Owns partner outcomes.", "sources": [3]},
             {"text": "Has a ZoomInfo profile.", "sources": [4]},
@@ -1010,7 +1010,7 @@ TKS_ORG = {
 
 
 class DeepResearch(Fresh):
-    SHEA_GUEST = [att("shea@tks.world", "Shea Tough")]
+    SHEA_GUEST = [att("shea@tks.world", "Shea Kim")]
     fake, build, queue = Research.fake, Research.build, Research.queue
 
     def setUp(self):
@@ -1026,7 +1026,7 @@ class DeepResearch(Fresh):
         os.environ.pop("ANTHROPIC_API_KEY", None)
 
     def test_deep_result_keeps_sourced_bullets_past_roles_and_education(self):
-        f = self.fake(deep_reply(SHEA, searched=[TKS_TEAM, "https://www.zoominfo.com/p/shea-tough", SHEA_TALK], fetched=[SHEA_PROFILE]))
+        f = self.fake(deep_reply(SHEA, searched=[TKS_TEAM, "https://www.zoominfo.com/p/shea-kim", SHEA_TALK], fetched=[SHEA_PROFILE]))
         self.assertTrue(self.queue(self.SHEA_GUEST)[0])
         S.research_step(NOW)
         self.assertEqual(len(f.calls), 1)
@@ -1036,10 +1036,10 @@ class DeepResearch(Fresh):
         self.assertTrue(rec["deepAt"].startswith("2026-10-20T12:00"))
         self.assertEqual(rec["searched"], 3)  # tks.world, linkedin.com, events.example.org (the blocked site isn't counted)
         p = rec["profile"]
-        self.assertEqual((p["v"], p["name"], p["confidence"]), (2, "Shea Tough", "high"))
+        self.assertEqual((p["v"], p["name"], p["confidence"]), (2, "Shea Kim", "high"))
         self.assertEqual(p["sources"], [{"url": TKS_TEAM, "label": "TKS team page"}, {"url": SHEA_PROFILE, "label": "Professional profile"},
                                         {"url": SHEA_TALK, "label": "Summit talk"}])
-        self.assertEqual(p["summary"], {"text": "Shea Tough leads Program Success at The Knowledge Society.", "src": [0]})
+        self.assertEqual(p["summary"], {"text": "Shea Kim leads Program Success at The Knowledge Society.", "src": [0]})
         self.assertEqual(p["now"], [{"text": "Runs the team that supports students through TKS programs.", "src": [0, 1]}])
         self.assertEqual(p["past"], [
             {"role": "Program Manager", "org": "Shopify", "when": "2018 - 2021", "src": [1], "points": [{"text": "Ran the 2019 - 2021 intern program.", "src": [1]}]},
@@ -1057,21 +1057,21 @@ class DeepResearch(Fresh):
         self.assertEqual(S.research_body()["people"]["shea@tks.world"]["profile"], p)
         alert = next(w for w in live["watch"] if w["kind"] == "New person")
         self.assertEqual(alert["text"], "Overture looked them up: Director, Program Success, Employee, Program Success. "
-                                        "Shea Tough leads Program Success at The Knowledge Society.")
+                                        "Shea Kim leads Program Success at The Knowledge Society.")
         self.assertFalse(S.needs_research(rec, NOW + timedelta(days=60)))  # deep research done and a title found: not again on its own
 
     def test_unseen_and_blocked_sources_never_back_a_bullet(self):
-        seen = {S.url_key(u): {} for u in (TKS_TEAM, SHEA_TALK, "https://www.zoominfo.com/p/shea-tough")}  # no web fetch this time
-        p = S.clean_profile(SHEA, seen, "person", name="Shea Tough")
+        seen = {S.url_key(u): {} for u in (TKS_TEAM, SHEA_TALK, "https://www.zoominfo.com/p/shea-kim")}  # no web fetch this time
+        p = S.clean_profile(SHEA, seen, "person", name="Shea Kim")
         self.assertEqual([s["url"] for s in p["sources"]], [TKS_TEAM, SHEA_TALK])
         self.assertEqual(p["past"], [{"role": "Analyst", "org": "Acme", "when": "2016 - 2018", "src": [1],
                                       "points": [{"text": "Built the reporting for the youth program.", "src": [1]}]}])  # Shopify's page was never opened
         self.assertEqual(p["education"], [])
         self.assertEqual(p["now"], [{"text": "Runs the team that supports students through TKS programs.", "src": [0]}])  # its unseen source is left off
-        self.assertIsNone(S.clean_profile(dict(SHEA, sources=SHEA["sources"][2:4]), seen, "person", name="Shea Tough"))  # only unseen or blocked pages
+        self.assertIsNone(S.clean_profile(dict(SHEA, sources=SHEA["sources"][2:4]), seen, "person", name="Shea Kim"))  # only unseen or blocked pages
         for bad in (None, {"found": False}, dict(SHEA, confidence="low"), dict(SHEA, found="yes")):
-            self.assertIsNone(S.clean_profile(bad, seen, "person", name="Shea Tough"))
-        self.assertIsNone(S.clean_profile(SHEA, {}, "person", name="Shea Tough"))  # nothing searched: nothing kept
+            self.assertIsNone(S.clean_profile(bad, seen, "person", name="Shea Kim"))
+        self.assertIsNone(S.clean_profile(SHEA, {}, "person", name="Shea Kim"))  # nothing searched: nothing kept
         # Claude may cite a page by its address too, never by one it didn't see
         p2 = S.clean_profile(dict(SHEA, now=[{"text": "Leads a team of 12.", "sources": [TKS_TEAM, "https://never-seen.example.com/bio"]}]), seen, "person")
         self.assertEqual(p2["now"], [{"text": "Leads a team of 12.", "src": [0]}])
@@ -1096,19 +1096,19 @@ class DeepResearch(Fresh):
         self.assertTrue(len(long) <= 260 and long.endswith("…"))
 
     def test_web_fetch_results_count_as_seen(self):
-        self.fake(deep_reply("{}", searched=[TKS_TEAM], fetched=[SHEA_PROFILE], asked={SHEA_PROFILE: "https://linkedin.com/in/shea-tough?trk=x"},
+        self.fake(deep_reply("{}", searched=[TKS_TEAM], fetched=[SHEA_PROFILE], asked={SHEA_PROFILE: "https://linkedin.com/in/shea-kim?trk=x"},
                              failed=["https://broken.example.com/page"]))
-        stop, _, seen = S.run_search(S.research_request("Shea Tough", "Tks", "tks.world", "shea@tks.world"), S.DEEP_BUDGET, S.DEEP_RESUMES)
+        stop, _, seen = S.run_search(S.research_request("Shea Kim", "Tks", "tks.world", "shea@tks.world"), S.DEEP_BUDGET, S.DEEP_RESUMES)
         self.assertEqual(stop, "end_turn")
         self.assertIn(S.url_key(TKS_TEAM), seen)
         self.assertIn(S.url_key(SHEA_PROFILE), seen)                                    # the page web fetch opened
-        self.assertIn(S.url_key("https://linkedin.com/in/shea-tough?trk=x"), seen)     # and the address Claude asked it to open
+        self.assertIn(S.url_key("https://linkedin.com/in/shea-kim?trk=x"), seen)     # and the address Claude asked it to open
         self.assertNotIn(S.url_key("https://broken.example.com/page"), seen)           # a fetch that failed opened nothing
         self.assertNotIn(S.url_key("https://printed-by-code.example/x"), seen)         # an address a code run printed isn't a page Overture saw
         # a paused deep search is resent with its code container, and the pages of every part count
         f = self.fake(deep_reply("", searched=[TKS_TEAM], stop="pause_turn", container=SimpleNamespace(id="container_abc")),
                       deep_reply(SHEA, fetched=[SHEA_PROFILE]))
-        out = S.research_person("Shea Tough", "Tks", "tks.world", "shea@tks.world")
+        out = S.research_person("Shea Kim", "Tks", "tks.world", "shea@tks.world")
         self.assertEqual(len(f.calls), 2)
         self.assertEqual(f.calls[1]["container"], "container_abc")
         self.assertNotIn("container", f.calls[0])
@@ -1117,7 +1117,7 @@ class DeepResearch(Fresh):
     def test_requests_send_no_email_and_block_sites_in_both_tools(self):
         S.save_settings({"research": {"blocked": ["people-site.com", "zoominfo.com"]}})
         f = self.fake(deep_reply({"found": False}, searched=[TKS_TEAM]), deep_reply({"found": False}))
-        live, meta, rec = self.build([att("stough@tks.world", "Shea Tough")])
+        live, meta, rec = self.build([att("skim@tks.world", "Shea Kim")])
         S.queue_research(meta, rec, NOW)
         S.queue_org_research(meta, rec, NOW)
         while S.research_step(NOW):
@@ -1126,7 +1126,7 @@ class DeepResearch(Fresh):
         for call in f.calls:
             sent = json.dumps(call, default=str)
             self.assertNotIn("@", sent)
-            self.assertNotIn("stough", sent.lower())
+            self.assertNotIn("skim", sent.lower())
             self.assertIn("tks.world", call["messages"][0]["content"])
             self.assertEqual([t["name"] for t in call["tools"]], ["web_search", "web_fetch"])
             for t in call["tools"]:
@@ -1135,7 +1135,7 @@ class DeepResearch(Fresh):
                 self.assertIn("spokeo.com", t["blocked_domains"])
                 self.assertEqual(len(t["blocked_domains"]), len(set(t["blocked_domains"])))
             self.assertEqual(call["output_config"], {"effort": "medium"})
-        self.assertIn("Shea Tough", f.calls[0]["messages"][0]["content"])
+        self.assertIn("Shea Kim", f.calls[0]["messages"][0]["content"])
         self.assertNotIn("Shea", json.dumps(f.calls[1]))  # the company request holds only its name and website
         self.assertEqual(f.calls[1]["system"], S.ORG_RESEARCH_SYSTEM)
         with self.assertRaises(S.ResearchError):
@@ -1143,7 +1143,7 @@ class DeepResearch(Fresh):
         with self.assertRaises(S.ResearchError):
             S.org_research_request("Example", "example.com")
         # nothing found: a plain note, never "look it up"
-        r = S.research_view("stough@tks.world", S.load_records()["people"]["stough@tks.world"], meta["stough@tks.world"])
+        r = S.research_view("skim@tks.world", S.load_records()["people"]["skim@tks.world"], meta["skim@tks.world"])
         self.assertEqual((r["status"], r["profile"]), ("unknown", None))
         self.assertEqual(r["note"], "Overture searched 1 site and found no public work information about them.")
         self.assertEqual(S.searched_note({"searched": 6}, "information about this company"), "Overture searched 6 sites and found no public information about this company.")
@@ -1258,24 +1258,24 @@ class DeepResearch(Fresh):
         for w in live["watch"]:
             self.assertIsNone(homework.search(w["text"]), w["text"])
         # the brief's facts carry both profiles (as plain sentences), also when only titles may go to AI
-        facts = {"call": {"title": "Intro", "company": "Tks"}, "people": [{"name": "Shea Tough", "title": "Director, Program Success", "note": "n"}],
+        facts = {"call": {"title": "Intro", "company": "Tks"}, "people": [{"name": "Shea Kim", "title": "Director, Program Success", "note": "n"}],
                  "company": None}
         for share in ("notes", "titles"):
             S.save_settings({"research": {"aiShare": share}})
             out = S.brief_facts(facts, S.load_records())
-            self.assertEqual(out["people"][0]["profile"]["summary"], "Shea Tough leads Program Success at The Knowledge Society.")
+            self.assertEqual(out["people"][0]["profile"]["summary"], "Shea Kim leads Program Success at The Knowledge Society.")
             self.assertEqual(out["people"][0]["profile"]["past"][0]["org"], "Shopify")
             self.assertEqual(out["company"]["profile"]["name"], "The Knowledge Society (TKS)")
             self.assertEqual(out["company"]["profile"]["facts"], {"Founded": "2016", "Headquarters": "Toronto"})
             self.assertNotIn("http", json.dumps(out["people"][0]["profile"]))
         self.assertNotIn("note", out["people"][0])  # titles only: still no notes
         self.assertNotIn("profile", facts["people"][0])  # the page's copy is untouched
-        other = S.brief_facts({"call": {"company": "Acme"}, "people": [{"name": "Shea Tough"}], "company": None}, S.load_records())
+        other = S.brief_facts({"call": {"company": "Acme"}, "people": [{"name": "Shea Kim"}], "company": None}, S.load_records())
         self.assertNotIn("profile", other["people"][0])  # another company's call: not this Shea
         self.assertIsNone(other["company"])
         # Ask Overture: this call's people and company carry their research
         ctx = json.loads(S.ask_context("who is Shea?", live["invites"][0]["id"], live, S.load_records()))
-        self.assertEqual(ctx["thisCall"]["people"][0]["moabResearch"]["summary"], "Shea Tough leads Program Success at The Knowledge Society.")
+        self.assertEqual(ctx["thisCall"]["people"][0]["moabResearch"]["summary"], "Shea Kim leads Program Success at The Knowledge Society.")
         self.assertEqual(ctx["thisCall"]["companyResearch"]["name"], "The Knowledge Society (TKS)")
         self.assertNotIn("profile", ctx["moabRecords"]["people"]["shea@tks.world"])
 
@@ -1338,7 +1338,7 @@ class ServerEndToEnd(ServerBase):
         st, txt, _ = self.req("GET", "/api/status")
         j = json.loads(txt)
         self.assertEqual(st, 200)
-        self.assertEqual(set(j), {"claude", "google", "ai", "hubspot", "gong", "granola", "meetily"})
+        self.assertEqual(set(j), {"hosted", "claude", "google", "ai", "hubspot", "gong", "granola", "meetily"})
         self.assertEqual((j["hubspot"]["configured"], j["hubspot"]["connected"], j["gong"]["configured"], j["gong"]["connected"]), (False, False, False, False))
         st, txt, h = self.req("GET", "/data/live.js")
         self.assertEqual(st, 200)
@@ -2963,14 +2963,14 @@ class References(Fresh):
 
     def test_google_meet_captions_are_read_live_and_again_after_the_call(self):
         self.fake(org_answer("partner"), org_answer("partner"))
-        st, b = S.mentions_live({"callId": "nw1", "segment": "capseg01", "offset": 0, "text": "Shea Tough: Harborline Labs called us.", "final": True,
+        st, b = S.mentions_live({"callId": "nw1", "segment": "capseg01", "offset": 0, "text": "Shea Kim: Harborline Labs called us.", "final": True,
                                  "source": "captions"})
         self.assertEqual(st, 200)
         org = self.org(b, "Harborline Labs")
         self.assertEqual(org["source"] if "source" in org else "captions", "captions")
         self.assertEqual(S.mentions_live({"callId": "nw1", "segment": "capseg02", "text": "a", "source": "radio"})[0], 400)
         # after the call: the whole caption transcript, read like an uploaded one
-        st, b = S.mentions_post({"callId": "nw1", "text": "Shea Tough: Harborline Labs called us.\nMarcus Bell: Talk to Rivet Analytics.", "source": "captions"})
+        st, b = S.mentions_post({"callId": "nw1", "text": "Shea Kim: Harborline Labs called us.\nMarcus Bell: Talk to Rivet Analytics.", "source": "captions"})
         self.assertEqual(st, 200)
         self.assertEqual(S.MENTION_SOURCES["captions"], "Google Meet's captions")
         self.assertIn("captions", S.AUTO_SOURCES)
@@ -4395,7 +4395,7 @@ class DeepResearchRoutes(ServerBase):
         S.RESEARCH_AUTOSTART = False
         with S.RQ_LOCK:
             S.RQ.update(queue=[], pending=set(), running=set(), errors={},
-                        meta={"shea@tks.world": {"name": "Shea Tough", "company": "Tks", "domain": "tks.world", "callId": "u1", "named": True, "internal": False, "local": {}}})
+                        meta={"shea@tks.world": {"name": "Shea Kim", "company": "Tks", "domain": "tks.world", "callId": "u1", "named": True, "internal": False, "local": {}}})
         ok = {"X-MOAB": "1", "Origin": origin}
         try:
             st, txt, _ = self.req("GET", "/api/research")
@@ -4436,6 +4436,167 @@ class ZoomIds(unittest.TestCase):
         for loc in ("https://zoom.us.evil.example/j/81234567890", "Room 4", "https://zoom.us/j/12"):
             e = ev("z", "2026-10-21T14:00:00+00:00", 30, base, location=loc)
             self.assertEqual(S.event_to_invite(e, ME["email"], S.empty_records())["zoomId"], "", loc)
+
+
+class SharedSite(ServerBase):
+    """The shared site (Render): each Google account sees only its own data; a signed-out visitor sees the connect screen."""
+    URL = "https://overture.example.com"
+    ENV = {"GOOGLE_CLIENT_ID": "cid", "GOOGLE_CLIENT_SECRET": "csecret"}
+
+    def setUp(self):
+        super().setUp()
+        import shutil
+        shutil.rmtree(Path(TMP) / "users", ignore_errors=True)
+        self.old = (S.HOSTED, S.PUBLIC_URL, S.HTTP, {k: os.environ.get(k) for k in list(self.ENV) + ["MOAB_ALLOWED", "DATABASE_URL"]})
+        S.HOSTED, S.PUBLIC_URL = True, self.URL
+        os.environ.update(self.ENV)
+        os.environ.pop("MOAB_ALLOWED", None)
+        S.HTTP = self.google
+
+    def tearDown(self):
+        S.HOSTED, S.PUBLIC_URL, S.HTTP, env = self.old
+        for k, v in env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def google(self, method, url, form=None, headers=None, timeout=15):
+        """Google's side: the code is the email signing in."""
+        if url == S.TOKEN_URL:
+            return 200, {"access_token": "AT-" + form["code"], "refresh_token": "RT-" + form["code"], "expires_in": 3600, "scope": S.CAL_SCOPE}
+        if url == S.USERINFO_URL:
+            return 200, {"email": headers["Authorization"].split("AT-", 1)[1], "name": "Someone"}
+        return 200, {}  # revoke
+
+    def hreq(self, method, path, body=None, cookie=None, write=False, signin=None):
+        h = {"Host": "overture.example.com"}
+        jar = ([S.SESSION_COOKIE + "=" + cookie] if cookie else []) + ([S.OAUTH_COOKIE + "=" + signin] if signin else [])
+        if jar:
+            h["Cookie"] = "; ".join(jar)
+        if write:
+            h.update({"X-MOAB": "1", "Origin": self.URL})
+        return self.req(method, path, body, h)
+
+    def callback(self, email, same_browser=True):
+        st, _, h = self.hreq("GET", "/auth/google")  # the sign-in starts here: Google's address, and a cookie for this browser
+        self.assertEqual(st, 302)
+        state = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(h["Location"]).query))["state"]
+        self.assertIn(S.OAUTH_COOKIE + "=" + state, h["Set-Cookie"])
+        return self.hreq("GET", "/auth/google/callback?state=" + state + "&code=" + urllib.parse.quote(email),
+                         signin=state if same_browser else None)
+
+    def sign_in(self, email):
+        st, txt, h = self.callback(email)
+        self.assertEqual(st, 302, txt)
+        self.assertIn("HttpOnly", h["Set-Cookie"])
+        self.assertIn("Secure", h["Set-Cookie"])
+        return h["Set-Cookie"].split(";")[0].split("=", 1)[1]
+
+    def test_signed_out_sees_only_the_connect_screen(self):
+        st, js, _ = self.hreq("GET", "/data/live.js")
+        self.assertEqual(st, 200)
+        self.assertIn("window.MOAB_LIVE = null", js)
+        self.assertIn('"hosted": true', js)
+        st, txt, _ = self.hreq("GET", "/api/status")
+        self.assertEqual((st, json.loads(txt)["google"]["connected"]), (200, False))
+        self.assertEqual(self.hreq("GET", "/api/records")[0], 401)
+        self.assertEqual(self.hreq("GET", "/api/records", cookie="made-up")[0], 401)
+        self.assertEqual(self.hreq("PUT", "/api/records/company", {"name": "Acme", "status": "New lead"}, write=True)[0], 401)
+        self.assertEqual(self.hreq("POST", "/auth/google/disconnect", {}, write=True)[0], 401)
+        self.assertEqual(self.hreq("GET", "/index.html")[0], 200)
+        self.assertEqual(self.req("GET", "/api/status", headers={"Host": "evil.example"})[0], 403)
+
+    def test_each_account_sees_only_its_own_data(self):
+        a, b = self.sign_in("chris@spotify.com"), self.sign_in("arjun@example.org")
+        st, txt, _ = self.hreq("PUT", "/api/records/company", {"name": "Acme", "status": "New lead"}, cookie=a, write=True)
+        self.assertEqual(st, 200, txt)
+        self.assertIn("Acme", self.hreq("GET", "/api/records", cookie=a)[1])
+        self.assertNotIn("Acme", self.hreq("GET", "/api/records", cookie=b)[1])
+        self.assertEqual(json.loads(self.hreq("GET", "/api/status", cookie=a)[1])["google"]["email"], "chris@spotify.com")
+        self.assertEqual(json.loads(self.hreq("GET", "/api/status", cookie=b)[1])["google"]["email"], "arjun@example.org")
+        folder = Path(TMP) / "users" / S.account_id("chris@spotify.com")
+        self.assertEqual(S.load_json(folder / "google-token.json", {})["access_token"], "AT-chris@spotify.com")
+        self.assertFalse((Path(TMP) / "google-token.json").exists())  # nothing lands outside an account's folder
+        self.assertNotIn(a, (Path(TMP) / "sessions.json").read_text(encoding="utf-8"))  # only hashes of the cookies are saved
+
+    def test_sign_out_ends_the_session_on_every_device(self):
+        a, phone, other = self.sign_in("chris@spotify.com"), self.sign_in("chris@spotify.com"), self.sign_in("arjun@example.org")
+        st, _, h = self.hreq("POST", "/auth/google/disconnect", {}, cookie=a, write=True)
+        self.assertEqual(st, 200)
+        self.assertIn("Max-Age=0", h["Set-Cookie"])
+        self.assertEqual(self.hreq("GET", "/api/records", cookie=a)[0], 401)
+        self.assertEqual(self.hreq("GET", "/api/records", cookie=phone)[0], 401)
+        self.assertEqual(self.hreq("GET", "/api/records", cookie=other)[0], 200)
+
+    def test_sign_in_must_finish_in_the_browser_that_started_it(self):
+        st, txt, h = self.callback("eve@evil.example", same_browser=False)  # a callback link someone else sent you
+        self.assertEqual(st, 400)
+        self.assertNotIn("Set-Cookie", h)
+
+    def test_removed_account_is_signed_out(self):
+        a = self.sign_in("chris@spotify.com")
+        os.environ["MOAB_ALLOWED"] = "arjun@example.org"
+        self.assertEqual(self.hreq("GET", "/api/records", cookie=a)[0], 401)
+
+    def test_environment_crm_keys_are_ignored_on_the_shared_site(self):
+        old = os.environ.get("HUBSPOT_TOKEN")
+        os.environ["HUBSPOT_TOKEN"] = "pat-operator"
+        try:
+            with S.as_user("u1"):
+                self.assertFalse(S.crm_configured("hubspot"))
+        finally:
+            os.environ.pop("HUBSPOT_TOKEN") if old is None else os.environ.__setitem__("HUBSPOT_TOKEN", old)
+
+    def test_allowed_accounts(self):
+        os.environ["MOAB_ALLOWED"] = "@spotify.com, arjun@example.org"
+        self.assertTrue(S.account_allowed("Chris@Spotify.com"))
+        self.assertTrue(S.account_allowed("arjun@example.org"))
+        self.assertFalse(S.account_allowed("eve@evil.example"))
+        self.assertFalse(S.account_allowed(""))
+        st, txt, h = self.callback("eve@evil.example")
+        self.assertEqual(st, 400)
+        self.assertNotIn("Set-Cookie", h)
+        self.assertFalse((Path(TMP) / "users" / S.account_id("eve@evil.example")).exists())
+
+    def test_no_account_means_no_data(self):
+        with self.assertRaises(S.NoUser):
+            S.DATA_DIR / "records.json"
+        with self.assertRaises(S.NoUser):
+            S.CACHE["at"]
+        with S.as_user("u1"):
+            S.CACHE["at"] = 5.0
+        with S.as_user("u2"):
+            self.assertEqual(S.CACHE["at"], 0.0)
+            self.assertEqual(Path(S.DATA_DIR / "x"), Path(TMP) / "users" / "u2" / "x")
+
+    def test_research_worker_takes_each_accounts_jobs_in_that_account(self):
+        with S.RQ_LOCK:
+            with S.as_user("u1"):
+                S.RQ["queue"].append(("x@acme.com", False))
+            try:
+                self.assertEqual(S._ready_user(), "u1")
+            finally:
+                with S.as_user("u1"):
+                    S.RQ["queue"].clear()
+            self.assertIsNone(S._ready_user())
+
+    def test_saved_files_kept_in_the_database(self):
+        os.environ["DATABASE_URL"] = "postgres://example"
+        calls = []
+        old = S._db_run
+        S._db_run = lambda sql, args=(), must=False: calls.append((sql.split()[0], args)) or (
+            [("users/u9/records.json", '{"a": 1}'), ("../evil.json", "x")] if sql.startswith("SELECT") else [])
+        try:
+            with S.as_user("u1"):
+                S.save_json(S.DATA_DIR / "records.json", {"a": 1})
+                S.remove_file(S.DATA_DIR / "records.json")
+            self.assertEqual([(c, a[0]) for c, a in calls], [("INSERT", "users/u1/records.json"), ("DELETE", "users/u1/records.json")])
+            self.assertEqual(S.db_restore(), 1)
+            self.assertEqual(S.load_json(Path(TMP) / "users" / "u9" / "records.json", {}), {"a": 1})
+            self.assertFalse((Path(TMP).parent / "evil.json").exists())
+        finally:
+            S._db_run = old
 
 
 if __name__ == "__main__":

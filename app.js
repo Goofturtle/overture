@@ -5,6 +5,8 @@
   const C = window.C;
   const { D, SNAP, MODE, SRC, ME, $, $$, esc, ic, plural, fmtDate, splitWhen, store, NEW_TAB, MONTHS, avatar, coTile, tagFor } = C;
   const LIVE_MODE = MODE === "live", DEMO = MODE === "demo";
+  // Where your data is kept: this PC, or (the shared site) your own account, which nobody else who signs in can see.
+  const savedWhere = () => (window.MOAB_STATUS && window.MOAB_STATUS.hosted ? "in your own account, which other people who sign in can't see" : "on this PC");
 
   Object.assign(C.ICONS, {
     menu: '<path d="M4 12h16M4 6h16M4 18h16"/>',
@@ -235,7 +237,7 @@
       + '<div class="connect-provider"><span class="connect-tile" aria-hidden="true">' + ic("calendar") + '</span><span class="connect-pt"><span class="connect-name">Google Calendar</span>'
       + '<span class="connect-acct">' + esc(st.google.email || "Read-only · the next 14 days") + "</span></span>" + action + "</div>"
       + (note ? '<p class="connect-note" role="status">' + note + "</p>" : "")
-      + '<p class="connect-privacy">' + ic("shield") + "<span>Read-only calendar access. Your calls, notes and records stay on this PC.</span></p>"
+      + '<p class="connect-privacy">' + ic("shield") + "<span>Read-only calendar access. Your calls, notes and records stay " + savedWhere() + ".</span></p>"
       + '<a class="connect-skip" href="?demo=1#/home">Look around with sample data</a></section>';
   }
   function noCallsCard() {
@@ -493,7 +495,7 @@
       + '<input id="authEmail" name="login_hint" type="email" placeholder="name@company.com" autocomplete="email"' + (ok ? "" : " disabled") + ">"
       + '<button type="submit" class="auth-go"' + (ok ? "" : " disabled") + ">Continue</button></form>"
       + (note ? '<p class="auth-note" role="status">' + note + "</p>" : "")
-      + '<p class="auth-legal">Read-only calendar access. Your calls, notes and records stay on this PC. <a href="?demo=1#/home">Look around with sample data</a></p>';
+      + '<p class="auth-legal">Read-only calendar access. Your calls, notes and records stay ' + savedWhere() + '. <a href="?demo=1#/home">Look around with sample data</a></p>';
   }
   function renderHomeEmpty(sec) {
     const bot = ($(".brand .logo") || { outerHTML: "" }).outerHTML.replace(/moabCut/g, "moabCutAsk");
@@ -2527,7 +2529,7 @@
 
   async function disconnectGoogle() {
     const email = ((window.MOAB_STATUS || {}).google || {}).email;
-    if (!confirm("Sign out" + (email ? " of " + email : "") + "? Overture stops reading your calendar until you sign in again. Your saved research and notes stay on this PC.")) return;
+    if (!confirm("Sign out" + (email ? " of " + email : "") + "? Overture stops reading your calendar until you sign in again. Your saved research and notes stay " + savedWhere() + ".")) return;
     try {
       const r = await C.fetchTimeout("/auth/google/disconnect", 15000, { method: "POST", headers: { "X-MOAB": "1" } });
       if (!r.ok) throw new Error();

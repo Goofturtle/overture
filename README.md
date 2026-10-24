@@ -2,13 +2,27 @@
 
 A call-prep agent for Chris (Spotify Backstage sales). It reads your real calls from Google Calendar, keeps its own records on this PC, and writes a brief for each call: who is on it, what changed since you last met, their Backstage situation, and how to open.
 
-## Run it
+## Try it without installing
 
-```
-tks-spotify/.venv/Scripts/python.exe tks-spotify/centralize/server.py
-```
+https://goofturtles.github.io/moab/?demo=1 shows Overture with made-up sample calls. Nothing is connected and nothing leaves your browser.
 
-Then open http://localhost:3576. In Claude Code it is the `centralize` preview. `--port 3580` runs it on another port.
+## The shared site (Render)
+
+One link where anyone signs in with Google and sees only their own calls, research and notes. Each Google account gets its own folder (`.data/users/<account>`); nothing from one account is ever read in another. Saved files are also kept in a small Postgres, because Render's free server wipes its disk when it sleeps.
+
+1. Open https://render.com/deploy?repo=https://github.com/Goofturtles/moab, sign in to Render, paste the Google OAuth client's ID and secret when asked, and press **Deploy**.
+2. In Google Cloud > Credentials > your OAuth client, add `<your Render URL>/auth/google/callback` as an authorized redirect URI.
+3. While the Google app is in Testing, add each person (Chris, you) under **OAuth consent screen > Test users**. Optional: set `MOAB_ALLOWED` on Render (emails or `@domain`, comma-separated) to limit who may sign in.
+
+Each person pastes their own Claude key in Settings. Meetily and Granola read files on your own PC, so the shared site doesn't use them, and the Chrome extension still talks to the copy on your PC. Render's free Postgres is deleted 30 days after it is made.
+
+## Run it on your own computer
+
+Your calendar sign-in, Claude key, CRM keys and notes are saved in the `.data/` folder next to `server.py`. That folder is git-ignored and never served.
+
+1. Install Python 3.11 or newer, then run `pip install -r requirements.txt` in this folder.
+2. Run `python server.py` (on a Mac: `python3 server.py`).
+3. Open http://localhost:3576. `--port 3580` runs it on another port.
 
 The first time, Home shows **Connect your calendar**. Setting up the Google sign-in once takes about ten minutes: follow [docs/GOOGLE-SETUP.md](docs/GOOGLE-SETUP.md).
 
