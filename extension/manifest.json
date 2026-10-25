@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Overture in-call panel",
   "short_name": "Overture",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Opens Overture's in-call panel (Overture on this PC, http://localhost:3576) in Chrome's side panel on Google Meet and Zoom web calls, and reads Google Meet's captions (when CC is on) so Overture can find who and what was mentioned.",
   "minimum_chrome_version": "116",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApcTxSl5dY6xD9+2qOWLtJqDOnIrFYyZCwyDZKQPat+to7oPrhAu2fVgQ9KvZWF1Rk0xKZm6qg9dEt7Jv197hxcxoUGftCaGANPcgo7YhdtRc9UqqN0/p3FPyX7omBUe+St2QtDga7XYE994HqqSbsfKkOH3E3kp1iVvdXORp+ml0fPuNZvT8ki2yCmvARyBvxCmx9M58UgcSTBPDeX9R1c/gZCvtYApQRKteyqQ6JIV1RDep8Q52mdHXZZaSt2LVk+XmBRrXBRw3gdcL1fmCvwDn3QFIksT1MplzN2oCV8Uf0tWRX/1M64ts6GVsvZJn9UL1vOAAQh4daeia9kPKswIDAQAB",
