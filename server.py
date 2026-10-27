@@ -7012,6 +7012,9 @@ class Handler(SimpleHTTPRequestHandler):
 
 def main(argv):
     global PORT
+    if sys.stderr is None or sys.stdout is None:  # started with pythonw (no window): the log goes to .data/server.log
+        ensure_data_dir()
+        sys.stdout = sys.stderr = open(DATA_ROOT / "server.log", "a", encoding="utf-8", buffering=1)
     if "--port" in argv:
         PORT = int(argv[argv.index("--port") + 1])
     elif os.environ.get("OVERTURE_PORT"):
