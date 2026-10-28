@@ -43,9 +43,21 @@
   };
   const NEW_TAB = '<span class="sr-only"> (opens in a new tab)</span>';
   // Storage can be blocked (private windows, the Meet iframe's partitioned storage): never let it break the page.
+  const accountEmail = String(ME.email || (window.OVERTURE_STATUS && window.OVERTURE_STATUS.google && window.OVERTURE_STATUS.google.email) || "").trim().toLowerCase();
+  const noteMemory = new Map();
+  const storageKey = (k) => "centralize:" + (k.startsWith("notes:") ? "account:" + (MODE === "demo" ? "demo" : accountEmail ? encodeURIComponent(accountEmail) : "anonymous") + ":" : "") + k;
   const store = {
-    get(k) { try { return JSON.parse(localStorage.getItem("centralize:" + k)); } catch (e) { return null; } },
-    set(k, v) { try { localStorage.setItem("centralize:" + k, JSON.stringify(v)); } catch (e) { /* ignore */ } },
+    key: storageKey,
+    get(k) {
+      // An old, unscoped note has no provable owner. Leave it intact, but never show it to another account.
+      if (k.startsWith("notes:") && MODE !== "demo" && !accountEmail) return noteMemory.get(k) || null;
+      try { return JSON.parse(localStorage.getItem(storageKey(k))); } catch (e) { return noteMemory.get(k) || null; }
+    },
+    set(k, v) {
+      noteMemory.set(k, v);
+      if (k.startsWith("notes:") && MODE !== "demo" && !accountEmail) return;
+      try { localStorage.setItem(storageKey(k), JSON.stringify(v)); } catch (e) { /* memory fallback */ }
+    },
   };
 
   // Lucide icon paths (ISC licence), drawn inline so the page has one icon family and no extra requests.
@@ -218,7 +230,13 @@
   async function fetchTimeout(url, ms, opts) {
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), ms);
-    try { return await fetch(url, Object.assign({ signal: ctl.signal }, opts || {})); } finally { clearTimeout(t); }
+    const options = Object.assign({ signal: ctl.signal }, opts || {});
+    // Tie requests from a stale tab to the account that rendered it. Never send this header to a public-data host.
+    if (accountEmail && typeof url === "string" && url.startsWith("/api/")) {
+      options.headers = new Headers(options.headers || {});
+      options.headers.set("X-OVERTURE-Account", accountEmail);
+    }
+    try { return await fetch(url, options); } finally { clearTimeout(t); }
   }
   async function refreshLive() {
     if (!LIVE) return;
@@ -254,6 +272,24 @@
   })();
 
   // ---------- Overture's own records (server.py keeps them in .data/records.json) ----------
+  async function loadCallAutoNotes(callId) {
+    if (MODE !== "live" || !inviteById(callId)) return [];
+    const r = await fetchTimeout("/api/live-assist?callId=" + encodeURIComponent(callId), 8000, { cache: "no-store", credentials: "same-origin" });
+    if (!r.ok) {
+      const error = new Error(r.status === 401 || r.status === 403 ? "Sign in again to view saved call notes." : "Saved call notes could not be refreshed. Try again shortly.");
+      error.accountChanged = r.status === 401 || r.status === 403;
+      throw error;
+    }
+    const j = await r.json();
+    if (!j || j.callId !== callId || !j.assist || !Array.isArray(j.assist.notes)) throw new Error("Overture returned notes for a different call or an invalid response.");
+    if (j.accountEmail && String(j.accountEmail).trim().toLowerCase() !== accountEmail) {
+      const error = new Error("Your signed-in account changed. Reload to view its saved notes.");
+      error.accountChanged = true;
+      throw error;
+    }
+    return j.assist.notes;
+  }
+
   async function saveRecord(kind, body, method) {
     let r;
     try {
@@ -1031,7 +1067,7 @@
 
   window.C = {
     explainHtml, explainFold, explainFor,
-    SNAP, D, MODE, SRC, ME, state, LIVE, saveRecord, askAI, deviceChecked, CHRIS, ASSUME, STEP_DEFS, RIVALS, PORTAL_POINTS, MONTHS, NEW_TAB, ICONS,
+    SNAP, D, MODE, SRC, ME, state, LIVE, saveRecord, loadCallAutoNotes, accountEmail, askAI, deviceChecked, CHRIS, ASSUME, STEP_DEFS, RIVALS, PORTAL_POINTS, MONTHS, NEW_TAB, ICONS,
     $, $$, esc, wait, plural, initials, fmtDate, splitWhen, ic, store, tint, solid, avatar, coTile, tagFor,
     cleanVer, parseVer, findAdopter, refreshLive, claudeChecked, fetchTimeout,
     readVersionFile, packagesFor, upgradeBill, tenure, personFacts, paperStatus, guessProduct,

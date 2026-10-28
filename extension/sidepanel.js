@@ -1,79 +1,91 @@
-// The side panel: Overture's in-call panel (http://localhost:3576/panel.html) in a frame, told which meeting this tab is in.
-// Google Meet: meet.google.com/abc-defg-hij gives meet=abc-defg-hij. Zoom web client: app.zoom.us/wc/123456789/join (or
-// zoom.us/wc/join/123456789, zoom.us/j/123456789) gives zoom=123456789. Overture matches that to your calendar's call.
-// Nothing leaves this PC: the only address this page talks to or shows is Overture's own, on localhost (see the manifest's CSP).
 "use strict";
-
-const Overture = "http://localhost:3576";
-const frame = document.getElementById("overture");
-const off = document.getElementById("off");
-
-function meetingParams(url) {
-  let u;
-  try { u = new URL(url); } catch (e) { return {}; }
-  if (u.protocol !== "https:") return {};
-  const host = u.hostname.toLowerCase();
-  if (host === "meet.google.com") {
-    const m = u.pathname.match(/^\/([a-z]{3}-[a-z]{4}-[a-z]{3})(?:\/|$)/i);
-    return m ? { meet: m[1].toLowerCase() } : {};
-  }
-  if (host === "zoom.us" || host.endsWith(".zoom.us")) {
-    const m = u.pathname.match(/\/(?:wc|j|s|w)\/(?:join\/)?(\d{9,11})(?:\/|$)/);
-    return m ? { zoom: m[1] } : {};
-  }
-  return {};
+const E = OvertureExtension;
+const frame = document.getElementById("overture"), off = document.getElementById("off"), title = document.getElementById("status-title"), detail = document.getElementById("status-detail"), toolbar = document.getElementById("toolbar"), status = document.getElementById("connection-status");
+let binding = null, shown = "", panelReady = false, generation = 0, readyTimeout = null, readerStatus = "Waiting for captions";
+const setStatus = (heading, body) => { title.textContent = heading; detail.textContent = body; off.hidden = false; toolbar.hidden = true; frame.hidden = true; };
+const hello = () => { if (binding && frame.contentWindow) frame.contentWindow.postMessage({ type: "overture-extension-ready", extensionOrigin: E.extensionOrigin, meetTabId: binding.tabId }, E.origin); };
+function deliver(payload) {
+  for (const batch of E.envelopes(payload)) frame.contentWindow.postMessage(batch, E.origin);
+  if (payload.ended || payload.type === "overture-call-ended") frame.contentWindow.postMessage({ type: "overture-call-ended", lines: [], events: [], extensionOrigin: E.extensionOrigin }, E.origin);
 }
-
-function panelUrl(p) {
-  const q = new URLSearchParams({ host: "ext" });
-  if (p.meet) q.set("meet", p.meet);
-  if (p.zoom) q.set("zoom", p.zoom);
-  return Overture + "/panel.html?" + q.toString();
+async function readerCommand(type) {
+  if (!binding) return;
+  const expected = binding;
+  try {
+    const tab = await chrome.tabs.get(expected.tabId);
+    if (E.meetingParams(tab.url).meet !== expected.meet) throw new Error("The Meet tab has changed meetings.");
+    const payload = await chrome.tabs.sendMessage(expected.tabId, { type });
+    if (binding !== expected || !payload) return;
+    if (type === "overture-captions-snapshot") {
+      deliver(payload);
+      frame.contentWindow.postMessage({ type: "overture-captions-status", box: !!payload.box, recoveryDropped: Number(payload.recoveryDropped) || 0 }, E.origin);
+      status.textContent = payload.box ? "Caption reader connected" : "Turn on CC in Meet";
+    }
+  } catch (_) { status.textContent = "Reload the Meet tab to connect captions"; }
 }
-
-async function activeTabUrl() {
+async function refresh(force) {
+  const revision = ++generation;
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    return (tab && tab.url) || "";
-  } catch (e) { return ""; }
+    const params = E.meetingParams(tab && tab.url);
+    if (params.meet && (!binding || binding.tabId !== tab.id || binding.meet !== params.meet)) binding = { ...params, tabId: tab.id };
+    if (!binding) { setStatus("Open your Google Meet call", "Open Overture from a Google Meet tab, then turn on captions (CC)."); return; }
+    const src = E.panelUrl(binding, binding.tabId, false);
+    if (!force && shown === src) return;
+    panelReady = false;
+    clearTimeout(readyTimeout);
+    setStatus("Connecting to Overture…", "The hosted app may need a moment to wake up.");
+    const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 25000);
+    try {
+      const response = await fetch(E.origin + "/api/status", { cache: "no-store", credentials: "omit", signal: controller.signal });
+      if (!response.ok) throw new Error("Overture returned HTTP " + response.status + ".");
+    } finally { clearTimeout(timeout); }
+    if (revision !== generation) return;
+    shown = src; frame.src = src; frame.hidden = false;
+    clearTimeout(readyTimeout);
+    readyTimeout = setTimeout(() => { if (!panelReady) setStatus("Connect your Overture account", "Open the connected call panel below to sign in and use first-party cookies. Keep it open during the call; captions flow automatically."); }, 20000);
+  } catch (error) {
+    if (revision !== generation) return;
+    shown = ""; setStatus("Overture is unavailable", error.name === "AbortError" ? "The hosted app took too long to respond. Try again in a moment." : "Could not reach the hosted app. Check your connection, then try again.");
+  }
 }
-
-async function overtureUp() {
-  try { return (await fetch(Overture + "/api/status", { cache: "no-store", credentials: "omit" })).ok; } catch (e) { return false; }
+async function openConnectedPanel() {
+  if (!binding) return;
+  const url = E.panelUrl(binding, binding.tabId, true);
+  const tabs = await chrome.tabs.query({ url: E.origin + "/panel.html*" });
+  const existing = tabs.find((tab) => { const p = E.panelInfo(tab.url); return p && p.meet === binding.meet && p.tabId === binding.tabId; });
+  if (existing) await chrome.tabs.update(existing.id, { active: true });
+  else await chrome.tabs.create({ url });
 }
-
-let shown = "";
-async function refresh() {
-  const up = await overtureUp();
-  off.hidden = up;
-  frame.hidden = !up;
-  if (!up) { shown = ""; return; }
-  const p = meetingParams(await activeTabUrl());
-  // Another tab that isn't a meeting (presenting, looking something up): keep the panel as it is, with the call's captions so far.
-  if (shown && !p.meet && !p.zoom) return;
-  const src = panelUrl(p);
-  if (src !== shown) { shown = src; frame.src = src; } // a new meeting in this tab: the panel opens its call
-}
-
-// Google Meet's captions (captions.js in the Meet tab) go to the panel in the frame, only from the meeting the panel is showing.
-if (chrome.runtime && chrome.runtime.onMessage) chrome.runtime.onMessage.addListener((msg, sender) => {
-  if (!msg || !sender.tab || frame.hidden || !shown || !frame.contentWindow) return;
-  const meet = meetingParams(sender.tab.url || "").meet;
-  if (!meet || new URL(shown).searchParams.get("meet") !== meet) return;
-  if (msg.type === "overture-captions" && Array.isArray(msg.lines)) {
-    frame.contentWindow.postMessage({ type: "overture-captions", lines: msg.lines.slice(0, 50).map((l) => String(l).slice(0, 600)) }, Overture);
-  } else if (msg.type === "overture-captions-status") {
-    frame.contentWindow.postMessage({ type: "overture-captions-status", box: !!msg.box }, Overture);
-  } else if (msg.type === "overture-call-ended") {
-    const lines = Array.isArray(msg.lines) ? msg.lines.slice(-20000).map((l) => String(l).slice(0, 600)) : [];
-    frame.contentWindow.postMessage({ type: "overture-call-ended", lines }, Overture);
+chrome.runtime.onMessage.addListener((message, sender) => {
+  if (message && sender.id === chrome.runtime.id && !sender.tab && message.type === "overture-meet-tab-closed" && binding && message.meetTabId === binding.tabId) {
+    status.textContent = "Call ended"; if (panelReady) deliver({ type: "overture-call-ended", lines: [], events: [] }); return;
+  }
+  if (!message || sender.id !== chrome.runtime.id || !sender.tab || sender.frameId !== 0 || !binding || sender.tab.id !== binding.tabId || E.meetingParams(sender.tab.url).meet !== binding.meet) return;
+  if (message.type === "overture-captions-status") {
+    readerStatus = message.box ? "Caption reader connected" : "Turn on CC in Meet";
+    status.textContent = readerStatus;
+    if (panelReady) frame.contentWindow.postMessage({ type: message.type, box: !!message.box, recoveryDropped: Number(message.recoveryDropped) || 0 }, E.origin);
+  } else if (panelReady && ["overture-captions", "overture-call-ended"].includes(message.type)) deliver(message);
+});
+window.addEventListener("message", (event) => {
+  if (event.origin !== E.origin || event.source !== frame.contentWindow || !event.data) return;
+  if (event.data.type === "overture-captions-reset") readerCommand("overture-captions-reset");
+  if (event.data.type === "overture-panel-ready") {
+    clearTimeout(readyTimeout);
+    if (!event.data.connected || !event.data.live) {
+      panelReady = false; setStatus("Sign in to Overture", "Open the connected call panel, sign in with Google, and return to this Meet call. If embedded sign-in is blocked, keep the connected panel open during the call."); return;
+    }
+    const wasReady = panelReady;
+    panelReady = true; off.hidden = true; frame.hidden = false; toolbar.hidden = false; status.textContent = readerStatus;
+    if (!wasReady) readerCommand("overture-captions-snapshot");
   }
 });
-
-document.getElementById("retry").addEventListener("click", refresh);
-chrome.tabs.onActivated.addListener(refresh);
-chrome.tabs.onUpdated.addListener((tabId, info) => { if (info.url) refresh(); });
-refresh();
-
-// For tools/test_live.py's node check (no effect in Chrome).
-if (typeof module !== "undefined") module.exports = { meetingParams, panelUrl };
+frame.addEventListener("load", hello);
+setInterval(() => { if (!panelReady && shown) hello(); }, 3000);
+document.getElementById("retry").addEventListener("click", () => refresh(true));
+document.getElementById("open-panel").addEventListener("click", openConnectedPanel);
+document.getElementById("open-panel-toolbar").addEventListener("click", openConnectedPanel);
+chrome.tabs.onActivated.addListener(() => refresh(false));
+chrome.tabs.onUpdated.addListener((tabId, info) => { if (info.url) refresh(false); });
+refresh(false);

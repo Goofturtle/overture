@@ -5,6 +5,7 @@
   const C = window.C;
   const { D, SNAP, MODE, SRC, ME, $, $$, esc, ic, plural, fmtDate, splitWhen, store, NEW_TAB, MONTHS, avatar, coTile, tagFor } = C;
   const LIVE_MODE = MODE === "live", DEMO = MODE === "demo";
+  const LA = window.OvertureLiveAssist;
   // Where your data is kept: this PC, or (the shared site) your own account, which nobody else who signs in can see.
   const savedWhere = () => (window.OVERTURE_STATUS && window.OVERTURE_STATUS.hosted ? "in your own account, which other people who sign in can't see" : "on this PC");
 
@@ -156,6 +157,7 @@
     const r = parse();
     if (!r) { if (!location.hash || location.hash === "#") go("#/home", true); return; } // in-page anchors are handled by data-jump
     if (r.bad) { go("#/home", true); return; }
+    stopSavedNotesWatch();
     // Leaving a page closes its dialogs, so the drawer can never edit a call that is no longer on screen.
     ["#palette", "#drawer", "#checkDialog", "#tlDialog"].forEach((s) => { if ($(s).open) $(s).close("cancel"); });
     closeNav();
@@ -1235,7 +1237,7 @@
     await findMentions(id, { text, filename: file.name, source: "upload" }, file.name);
   }
   function mentionsFromNotes(id) {
-    const panel = (store.get("notes:" + id) || []).map((n) => ({ speaker: "Your note", time: "", text: String(n.text || "").slice(0, 4000) }));
+    const panel = panelManualNotes(id).map((n) => ({ speaker: "Your note", time: "", text: String(n.text || "").slice(0, 4000) }));
     const typed = String($("#afterNotes").value || "").split(/\n+/).filter((t) => t.trim()).slice(0, 2000).map((t) => ({ speaker: "Your notes", time: "", text: t.slice(0, 4000) }));
     const lines = panel.concat(typed).filter((l) => l.text.trim());
     const st = mnState(id);
@@ -1463,13 +1465,70 @@
     if (focusSel && $(focusSel)) $(focusSel).focus();
   }
 
+  // The server's per-call snapshot is authoritative for automatic notes; manual notes remain separate.
+  const savedNotesWatch = { epoch: 0, timer: null, loading: false, error: "" };
+  const onAfterNotes = (id) => isOnCall(id) && runs[id] && runs[id].tab === "after" && runs[id].ctx && runs[id].ctx.done;
+  const panelManualNotes = (id) => (store.get("notes:" + id) || []).filter((n) => n && !n.assist);
+  function renderSavedNotes(id) {
+    if (!isOnCall(id)) return;
+    const target = $("#savedCallNotes"), status = $("#savedCallNotesStatus");
+    if (!target || !status) return;
+    const html = LA ? LA.renderNotes(store.get("notes:" + id) || []) : '<p class="help">Automatic notes are unavailable. Reload the page to try again.</p>';
+    if (target.innerHTML !== html) target.innerHTML = html;
+    status.textContent = savedNotesWatch.error || (savedNotesWatch.loading ? "Refreshing saved notes…" : DEMO ? "Sample call notes" : window.OVERTURE_STATUS && window.OVERTURE_STATUS.hosted ? "Saved automatically to your account." : "Saved automatically on this PC.");
+    const manual = panelManualNotes(id), button = $("#importNotes");
+    button.hidden = !manual.length;
+    button.innerHTML = ic("panel") + "Bring in " + plural(manual.length, "note") + " from the in-call panel";
+  }
+  function stopSavedNotesWatch() {
+    clearTimeout(savedNotesWatch.timer);
+    savedNotesWatch.timer = null;
+    savedNotesWatch.epoch++;
+    savedNotesWatch.loading = false;
+    savedNotesWatch.error = "";
+  }
+  async function refreshSavedNotes(id) {
+    if (!LIVE_MODE || !LA || !onAfterNotes(id) || savedNotesWatch.loading) return;
+    clearTimeout(savedNotesWatch.timer);
+    const epoch = savedNotesWatch.epoch;
+    savedNotesWatch.loading = true;
+    renderSavedNotes(id);
+    try {
+      const incoming = await C.loadCallAutoNotes(id);
+      if (epoch !== savedNotesWatch.epoch || !onAfterNotes(id)) return;
+      const before = store.get("notes:" + id) || [], merged = LA.mergeNotes(before, incoming);
+      if (JSON.stringify(before) !== JSON.stringify(merged)) store.set("notes:" + id, merged);
+      savedNotesWatch.error = "";
+    } catch (e) {
+      if (epoch !== savedNotesWatch.epoch || !onAfterNotes(id)) return;
+      savedNotesWatch.error = e.message || "Saved call notes could not be refreshed.";
+      if (e.accountChanged) store.set("notes:" + id, panelManualNotes(id));
+    } finally {
+      if (epoch === savedNotesWatch.epoch) {
+        savedNotesWatch.loading = false;
+        if (onAfterNotes(id)) {
+          renderSavedNotes(id);
+          savedNotesWatch.timer = setTimeout(() => {
+            if (document.visibilityState === "visible") refreshSavedNotes(id);
+          }, savedNotesWatch.error ? 7000 : 3500);
+        }
+      }
+    }
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && onAfterNotes(app.callId)) refreshSavedNotes(app.callId);
+  });
+  window.addEventListener("focus", () => { if (onAfterNotes(app.callId)) refreshSavedNotes(app.callId); });
+  window.addEventListener("storage", (event) => {
+    if (onAfterNotes(app.callId) && (!event.key || event.key === store.key("notes:" + app.callId))) renderSavedNotes(app.callId);
+  });
+
   function renderAfter(run) {
     const inv = run.ctx.invite;
     $("#afterHead").innerHTML = '<div class="title-row"><h1 tabindex="-1">' + esc(inv.company) + '</h1></div><p class="meta">After the call · ' + esc(inv.title) + "</p>";
     $("#afterNotes").value = run.notes;
-    const panelNotes = store.get("notes:" + inv.id) || [];
-    $("#importNotes").hidden = !panelNotes.length;
-    $("#importNotes").innerHTML = ic("panel") + "Bring in " + plural(panelNotes.length, "note") + " from the in-call panel";
+    renderSavedNotes(inv.id);
+    refreshSavedNotes(inv.id);
     renderChanges(run);
     renderMentions(inv.id);
     const mns = mnState(inv.id);
@@ -1528,6 +1587,8 @@
     if (tab === "after" && openAfter(app.callId)) return; // runs the agent first, then shows After the call
     if (!run || !run.ctx || !run.ctx.done) return;
     run.tab = tab;
+    if (tab === "after") { renderSavedNotes(app.callId); refreshSavedNotes(app.callId); }
+    else stopSavedNotesWatch();
     history.replaceState(null, "", "#/calls/" + app.callId + (tab === "after" ? "/after" : ""));
     showTab(tab);
     (tab === "brief" ? $("#tabBrief") : $("#tabAfter")).focus();
@@ -2750,7 +2811,7 @@
     });
     $("#importNotes").addEventListener("click", () => {
       const run = runs[app.callId];
-      const notes = store.get("notes:" + app.callId) || [];
+      const notes = panelManualNotes(app.callId);
       const text = notes.map((n) => n.kind + ": " + n.text).join("\n");
       $("#afterNotes").value = ($("#afterNotes").value.trim() ? $("#afterNotes").value.trim() + "\n" : "") + text;
       if (run) run.notes = $("#afterNotes").value;

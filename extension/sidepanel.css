@@ -14,3 +14,11 @@ iframe[hidden], .off[hidden] { display: none; }
   font: 500 13px/1.45 inherit; cursor: pointer; }
 .off button:hover { border-color: var(--accent); }
 .off button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+body { display: flex; flex-direction: column; }
+[hidden] { display: none !important; }
+iframe { flex: 1; min-height: 0; }
+#toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 11px; }
+#toolbar button { color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; cursor: pointer; }
+.off .privacy { margin-top: 16px; font-size: 11px; }
+#open-panel { background: var(--accent); color: white; }

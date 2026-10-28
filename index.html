@@ -18,6 +18,7 @@
   <link rel="stylesheet" href="calendar.css">
   <link rel="stylesheet" href="inbox.css">
   <link rel="stylesheet" href="live.css">
+  <link rel="stylesheet" href="after-notes.css">
   <link rel="stylesheet" href="companies.css">
   <link rel="stylesheet" href="mentions.css">
   <link rel="stylesheet" href="settings.css">
@@ -86,6 +87,10 @@
           <div id="panelBrief" role="tabpanel" aria-labelledby="tabBrief"></div>
           <div id="panelAfter" role="tabpanel" aria-labelledby="tabAfter" hidden>
             <div id="afterHead"></div>
+            <div class="sec saved-call-notes" aria-label="Saved automatic call notes">
+              <div id="savedCallNotes"></div>
+              <p id="savedCallNotesStatus" class="help" role="status"></p>
+            </div>
             <section class="sec">
               <div class="sec-head"><h2>Call notes</h2><span class="src sample" data-src="records">Sample data</span><span class="notes-saved" id="notesSaved" role="status"></span></div>
               <label for="afterNotes" class="sr-only">Call notes</label>
@@ -205,6 +210,7 @@
   <script src="data/live.js"></script><!-- server.py: your calendar + Overture records, or null -->
   <script src="settings.js"></script>
   <script src="core.js"></script>
+  <script src="live-assist.js"></script>
   <script src="profile.js"></script>
   <script src="guides.js"></script>
   <script src="map.js"></script>

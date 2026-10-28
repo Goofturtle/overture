@@ -1,21 +1,16 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Overture</title>
-  <link rel="stylesheet" href="sidepanel.css">
-</head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Overture</title><link rel="stylesheet" href="sidepanel.css"></head>
 <body>
-  <!-- Overture's own in-call panel, from Overture on this PC. The meeting code from this tab's address picks the call. -->
-  <iframe id="overture" title="Overture in-call panel" hidden></iframe>
-  <main id="off" class="off" hidden>
+  <header id="toolbar" hidden><span id="connection-status" role="status">Connecting…</span><button id="open-panel-toolbar" type="button">Open in tab</button></header>
+  <iframe id="overture" title="Overture in-call panel" referrerpolicy="no-referrer" hidden></iframe>
+  <main id="off" class="off">
     <img src="icons/icon48.png" alt="" width="40" height="40">
-    <h1>Overture isn't running</h1>
-    <p>Start Overture on this PC, then press Try again.</p>
-    <pre>tks-spotify/.venv/Scripts/python.exe tks-spotify/centralize/server.py</pre>
+    <h1 id="status-title">Connecting to Overture…</h1>
+    <p id="status-detail" role="status">Connecting to your hosted in-call panel.</p>
+    <button id="open-panel" type="button">Open connected call panel</button>
     <button id="retry" type="button">Try again</button>
+    <p class="privacy">Uses Google Meet captions with CC on. Tell participants you are taking AI notes. Captions are sent to your Overture account for lookup and notes.</p>
   </main>
-  <script src="sidepanel.js"></script>
-</body>
-</html>
+  <script src="config.js"></script><script src="sidepanel.js"></script>
+</body></html>

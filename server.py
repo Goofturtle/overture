@@ -14,6 +14,8 @@ Run from anywhere:  tks-spotify/.venv/Scripts/python.exe tks-spotify/centralize/
 Secrets and tokens stay in .data/ (git-ignored) and are never logged or sent to the browser.
 """
 import base64
+from difflib import SequenceMatcher
+from live_assist import build_assist as _build_live_assist, extract_notes as _extract_live_notes, merge_notes as _merge_live_notes, clean_semantic as _clean_live_semantic, SEMANTIC_SYSTEM
 import contextlib
 import contextvars
 import hashlib
@@ -1373,11 +1375,13 @@ def write_records(kind, body):
             saved.update(c, updatedAt=now_iso())
             out = {"email": email, **saved}
         elif kind == "call-notes":
-            if c["text"].strip():
-                r["callNotes"][c["callId"]] = {"text": c["text"], "updatedAt": now_iso()}
+            prior = r["callNotes"].get(c["callId"]) or {}
+            if c["text"].strip() or prior.get("autoNotes"):
+                # Manual text and automatic notes are separate; saving/clearing one never erases the other.
+                r["callNotes"][c["callId"]] = dict(prior, text=c["text"], updatedAt=now_iso())
             else:
                 r["callNotes"].pop(c["callId"], None)
-            out = {"callId": c["callId"], "text": c["text"]}
+            out = {"callId": c["callId"], "text": c["text"], "autoNotes": prior.get("autoNotes")}
         elif kind == "settings":
             r["settings"].update(c)
             out = dict(r["settings"])
@@ -1689,12 +1693,12 @@ def stage_alerts(companies, seen, now, invites=()):
 
 # ---------------------------------------------------------------- Claude ----------------------------------------------------------------
 
-def claude_text(system, content, max_tokens, timeout):
+def claude_text(system, content, max_tokens, timeout, retries=1):
     try:
         import anthropic  # only needed when Claude is on
     except ImportError:
         return 503, {"error": "the anthropic package is not installed"}
-    client = anthropic.Anthropic(api_key=claude_key() or None, timeout=timeout, max_retries=1)
+    client = anthropic.Anthropic(api_key=claude_key() or None, timeout=timeout, max_retries=retries)
     try:
         resp = client.beta.messages.create(
             model=MODEL,
@@ -4175,8 +4179,9 @@ def extract_mentions(lines, ctx, hints=None):
             return
         if len(found) >= MAX_MENTIONS:
             return
+        raw_sent = next((raw for _, raw in _sentences(line.get("rawText", "")) if raw.casefold() == sent.casefold()), sent)
         found[key] = {"key": key, "name": name, "role": role, "kind": kind, "count": 1, "si": cur["si"],
-                      "quote": {"text": quote_for(sent, a, b), "speaker": clean_text(line.get("speaker"), 80), "time": clean_text(line.get("time"), 12)}}
+                      "quote": {"text": quote_for(raw_sent, a, b), "speaker": clean_text(line.get("speaker"), 80), "time": clean_text(line.get("time"), 12)}}
 
     def ok_first(w):
         lw = w.lower()
@@ -4216,6 +4221,13 @@ def extract_mentions(lines, ctx, hints=None):
                     code = bool(CODENAME_RE.search(role) or CODE_AFTER_RE.match(sent, m.end(ri)))
                     inside = next((t for t in taken if t[0] <= m.start(fi) < t[1]), None)
                     if inside:  # "our new CTO, Maria Gomez": the full name already counted; keep the role with it
+                        # An explicit different company must survive even for a full name.
+                        if (rx is FROM_RE and not code and inside[2] in found and not re.fullmatch(TEAM, role)
+                                and not any(w.lower() in NONPERSON or w.lower() in STARTWORDS for w in role.split())
+                                and not any(w.lower() in ctx["companyWords"] for w in role.split())
+                                and not TEAM_AFTER_RE.match(sent, m.end(ri))):
+                            found[inside[2]]["role"] = "at " + role
+                            found[inside[2]]["kind"] = "full"
                         if (not code and inside[2] in found and not found[inside[2]]["role"] and (rx is not FROM_RE or re.fullmatch(TEAM, role))
                                 and not _refers_to_us(det, spk, ctx)):
                             found[inside[2]]["role"] = role
@@ -4286,7 +4298,8 @@ def extract_mentions(lines, ctx, hints=None):
         if it["kind"] == "known":
             it["known"] = known_full[norm_name(it["name"])]
         elif it["kind"] == "partial":
-            it["candidates"] = list(known_first.get(it["name"].lower(), []))[:3]
+            # A Ravi at a different company is not the Ravi cached for this call's account.
+            it["candidates"] = [] if it.get("role", "").startswith("at ") else list(known_first.get(it["name"].lower(), []))[:3]
         elif it["kind"] == "role":
             it["candidates"] = [k for k in ctx["known"] if k.get("title") and _title_matches(it["role"], k["title"])][:3]
         out.append(it)
@@ -4743,6 +4756,7 @@ def update_org(call_id, oid, fn):
         fn(it, r)
         block["updatedAt"] = now_iso()
         sync_connections(r, call_id)
+        _sync_auto_fact_notes(r, call_id)
         if len(json.dumps(r)) > MAX_RECORDS_BYTES:
             raise Invalid("the records store is full")
         save_json(records_path(), r)
@@ -5069,13 +5083,18 @@ def sync_connections(r, call_id):
             continue
         if not isinstance(p, dict) or not p.get("name"):
             continue
+        if p.get("inferred") and not it.get("confirmed"):
+            continue  # guessed spelling/identity never auto-adds an unconfirmed connection
         cid = connection_id(call_id, "person", it.get("key") or it["id"])
         if cid in removed:
             continue
         said = it.get("said") or {}
-        keep[cid] = {"id": cid, "kind": "person", "callId": call_id, "mentionId": it["id"], "company": block.get("company", ""),
-                     "domain": block.get("domain", ""), "name": clean_text(p.get("name"), 100), "title": clean_text(p.get("title"), 120),
-                     "team": clean_text(p.get("team") or it.get("role"), 120), "relationship": str(p.get("relationship") or said.get("relationship") or ""),
+        scope = person_mention_scope(block, it, r)
+        if scope["error"]:
+            continue
+        keep[cid] = {"id": cid, "kind": "person", "callId": call_id, "mentionId": it["id"], "company": scope["company"],
+                     "domain": scope["domain"], "name": clean_text(p.get("name"), 100), "title": clean_text(p.get("title"), 120),
+                     "team": clean_text(p.get("team") or scope["role"], 120), "relationship": str(p.get("relationship") or said.get("relationship") or ""),
                      "label": said.get("label") or (it.get("role") if it.get("role") and not str(it.get("role")).startswith("at ") else "") or "mentioned",
                      "said": said.get("said", ""), "source": "Said on the call" if said else (p.get("from") or "Web"),
                      "sources": (_person_view(p) or {}).get("sources", []), "from": it.get("fromNode") or "",
@@ -5161,21 +5180,35 @@ MENTION_SYSTEM = (
 )
 
 
-def mention_request(name, role, company, domain):
-    """The exact request for one mention: the name or first name, the role or team words, the company name and domain. Nothing else."""
+def mention_request(name, role, company, domain, approximate=False, company_name_only=False):
+    """Only public professional identifiers reach research; never the transcript or a private discussion."""
     name, role, company, domain = clean_text(name, 100), clean_text(role, 80), clean_text(company, 120), str(domain or "").lower()
-    if (not name and not role) or "@" in name + role + company or not DOMAIN_RE.match(domain) or personal_domain(domain):
+    if (not name and not role) or "@" in name + role + company or (not domain and not (company_name_only and company)) or (domain and (not DOMAIN_RE.match(domain) or personal_domain(domain))):
         raise ResearchError("not enough to look them up")
     if CODENAME_RE.search(name + " " + role):
         raise ResearchError("that looks like a codename, so Overture didn't send it")
     user = ("Mentioned on the call: " + (name or "(no name given)") + "\nRole or team: " + (role or "(not said)")
-            + "\nCompany: " + (company or domain) + "\nCompany website: " + domain
-            + "\n\nWho is this? Answer with the JSON object only.")
-    return search_request(MENTION_SYSTEM, user, LOOKUP_SEARCHES)
+            + "\nCompany: " + (company or domain) + "\nCompany website: " + (domain or "not resolved; search the explicitly spoken company name"))
+    system = MENTION_SYSTEM
+    if company_name_only:
+        system += ("\nThe company name was explicitly spoken but its official website is not yet resolved. "
+                   "Search the company NAME together with the spoken person name. The company/acronym may refer to multiple "
+                   "organizations. Return only possible source-backed matches and include company (the organization named by "
+                   "the source). Each candidate's citations must show the stated company/name or its official website. "
+                   "Do not substitute another company from the meeting. Do not claim the organization or identity is confirmed.")
+    if approximate:
+        system += ("\nAn exact-name lookup found no clear sourced match. The spoken name may have been mis-transcribed. "
+                   "Search only plausible close spelling/phonetic variants at the stated company. A possible name correction is "
+                   "not an established identity. Use the same source-backed candidates schema and include matchKind=\"inferred\", "
+                   "spokenName (the exact supplied spelling), and whyPossible (one short reason). Never invent a person or job; "
+                   "return an empty candidate list if no source-backed close variant fits.")
+        user += "\nSpoken spelling (unchanged): " + name + "\nFind possible close variants only; do not claim a correction is certain."
+    user += "\n\nWho is this? Answer with the JSON object only."
+    return search_request(system, user, LOOKUP_SEARCHES)
 
 
-def clean_candidates(obj, seen, job):
-    """Claude's candidates -> at most 3 sourced people whose name fits the mention. Anything unsourced or unsure is dropped."""
+def clean_candidates(obj, seen, job, allow_inferred=False):
+    """Keep only source-backed work facts. Similar names are explicitly uncertain, never silently substituted."""
     out, names = [], set()
     cands = obj.get("candidates") if isinstance(obj, dict) else None
     want = norm_name(job.get("name") or "")
@@ -5187,16 +5220,33 @@ def clean_candidates(obj, seen, job):
         n = norm_name(name)
         if r["status"] != "done" or len(n.split()) < 2 or "@" in name or re.search(r"\d", name) or n in names:
             continue
-        if want and (n != want if len(want.split()) > 1 else n.split()[0] != want):
-            continue  # not the name that was said
+        exact = not want or (n == want if len(want.split()) > 1 else n.split()[0] == want)
+        if not exact:
+            given, spoken = n.split()[0], want.split()[0] if want else ""
+            close = bool(spoken and given[0] == spoken[0] and SequenceMatcher(None, spoken, given).ratio() >= .60)
+            if not allow_inferred or not close:
+                continue
+        inferred = bool(allow_inferred)  # the strict lookup failed, even if this pass repeats the same spelling
         why = clean_text(c.get("why"), 200)
         if "@" in why or PHONE_RE.search(why):
             why = ""
         names.add(n)
         ev = clean_evidence(c.get("sources"), r["sources"], seen)
+        if not ev:
+            continue
+        if job.get("companyNameOnly"):
+            # Name-only organization lookup needs actual company evidence, not just a model's company field.
+            company_words = re.findall(r"[a-z0-9]+", norm_org(job.get("company") or ""))
+            proof = " ".join(str(s.get("quote") or "") + " " + (urllib.parse.urlsplit(s.get("url", "")).hostname or "") for s in ev).casefold()
+            if not company_words or not all(re.search(r"(?<![a-z0-9])" + re.escape(word) + r"(?![a-z0-9])", proof) for word in company_words):
+                continue
         out.append({"name": name, "title": r["title"], "team": r["team"], "seniority": r["seniority"], "tenure": r["tenure"],
                     "relationship": r["relationship"] if r["relationship"] != "unknown" else "", "confidence": r["confidence"],
-                    "sources": ev, "why": why, "from": "Web", "explanation": clean_explanation(c.get("explanation"), c.get("sources"), ev)})
+                    "sources": ev, "why": why, "from": "Web", "explanation": clean_explanation(c.get("explanation"), c.get("sources"), ev),
+                    "inferred": inferred, "spokenName": clean_text(job.get("name"), 100),
+                    "whyPossible": clean_text(c.get("whyPossible"), 200) if inferred else "",
+                    "organizationUnverified": bool(job.get("companyNameOnly")), "companyHint": clean_text(job.get("company"), 120),
+                    "organizationLabel": clean_text(c.get("company"), 160)})
         if len(out) == 3:
             break
     return out
@@ -5217,6 +5267,7 @@ def update_mention(call_id, mid, fn):
         fn(it, r)
         block["updatedAt"] = now_iso()
         sync_connections(r, call_id)
+        _sync_auto_fact_notes(r, call_id)
         if len(json.dumps(r)) > MAX_RECORDS_BYTES:
             raise Invalid("the records store is full")
         save_json(records_path(), r)
@@ -5255,42 +5306,78 @@ def on_company_site(c, domain):
 
 
 def do_mention_lookup(job, now=None):
-    """The research worker's job for one mention: search, keep sourced candidates. Exactly one sourced match for the name and the
-    role or team said with it is marked found automatically (you can change it); several, or one that doesn't clearly fit, are
-    shown most likely first as "Likely, not confirmed" and nothing is saved as a connection until you pick or confirm."""
-    if not source_on("web"):  # turned off while it waited: nothing goes to the web
+    """Exact lookup first; optional close-name search remains explicitly a guess until the user confirms."""
+    if not source_on("web"):
         return update_mention(job["callId"], job["id"], lambda it, _r: it.update(status="nokey", note=WEB_OFF_NOTE) if it.get("status") == "pending" else None)
     if held_back(job):
         return None
     role = job.get("role") or ""
-    key = ("person", norm_name(job.get("name") or ""), role.lower(), norm_org(job.get("company")))
+    key = ("person-v2", norm_name(job.get("name") or ""), role.lower(), norm_org(job.get("company")), str(job.get("domain") or "").lower())
     cands = _cache_get(key, job.get("forced"))
+    start = _time.monotonic()
     if cands is None:
-        stop, text, seen = run_search(mention_request(job.get("name"), role, job.get("company"), job.get("domain")), LOOKUP_BUDGET)
-        cands = [] if stop == "refusal" else clean_candidates(extract_json(text), seen, job)
+        # Both passes share a single bounded time budget; no extra unbounded retry loop.
+        stop, result, seen = run_search(mention_request(job.get("name"), role, job.get("company"), job.get("domain"), company_name_only=bool(job.get("companyNameOnly"))), min(12, LOOKUP_BUDGET))
+        if stop == "refusal":
+            raise ResearchError("The provider declined this lookup; the identity has not been verified")
+        cands = clean_candidates(extract_json(result), seen, job)
+        if not cands and job.get("name") and stop != "refusal":
+            left = LOOKUP_BUDGET - (_time.monotonic() - start)
+            if left > 2:
+                stop, result, seen = run_search(mention_request(job.get("name"), role, job.get("company"), job.get("domain"), approximate=True, company_name_only=bool(job.get("companyNameOnly"))), left)
+                if stop == "refusal":
+                    raise ResearchError("The provider declined possible-name research; the identity remains unverified")
+                cands = clean_candidates(extract_json(result), seen, job, allow_inferred=True)
         _cache_put(key, cands)
-    cands = sorted((dict(c) for c in cands), key=lambda c: (not role_fits(role, c), c.get("confidence") != "high"))  # most likely first
-    # Found automatically: one full name, or one first name whose team fits and whose source is the company's own website.
-    # A role with no name ("our new CTO") is never auto-picked: the web often still lists the one before.
-    auto = len(cands) == 1 and (job.get("kind") == "full" or (job.get("kind") == "partial" and bool(job.get("name"))
-                                                              and on_company_site(cands[0], job.get("domain")) and role_fits(role, cands[0])))
+    cands = sorted((dict(c) for c in cands), key=lambda c: (bool(c.get("inferred")), not role_fits(role, c), c.get("confidence") != "high"))
+    # A first name or a possible ASR correction never establishes identity automatically.
+    auto = len(cands) == 1 and job.get("kind") == "full" and not cands[0].get("inferred") and not job.get("companyNameOnly")
     status = "notfound" if not cands else "found" if auto else "pick"
-
     def apply(it, _r):
         if it.get("status") != "pending":
-            return  # you answered it meanwhile
+            return
         it.update(status=status, person=cands[0] if auto else None, candidates=cands if status == "pick" else [], autoFound=auto,
-                  note="" if cands else "Overture looked on the web and found no one who clearly fits.", lookedAt=now_iso())
+                  exactLookupComplete=True, inferred=any(c.get("inferred") for c in cands),
+                  note="Possible match; the spoken spelling may be wrong. Confirm before treating this as the person mentioned." if any(c.get("inferred") for c in cands)
+                       else "Possible match. The company name/acronym may be ambiguous; confirm the organization and person." if cands and job.get("companyNameOnly")
+                       else "" if cands else "No exact source-backed match was found in this lookup; that does not mean the person does not exist.", lookedAt=now_iso())
     update_mention(job["callId"], job["id"], apply)
+
+
+def person_mention_scope(block, it, records):
+    """Resolve known company domains, or keep an explicit company-name-only public lookup.
+    Unknown/ambiguous aliases never inherit the call account and never invent a domain.
+    Keep first-name identity confirmation unchanged.
+    """
+    role = str(it.get("role") or "")
+    hint = clean_text(it.get("mentionedCompany") or (role[3:] if role.startswith("at ") else ""), 120)
+    if not hint:
+        return {"company": block.get("company", ""), "domain": block.get("domain", ""), "role": role, "error": "", "nameOnly": False}
+    domain = str(it.get("mentionedDomain") or "").lower()
+    if not domain:
+        orgs = known_orgs([], records, "", "")
+        domains = {str(o.get("domain") or "").lower() for name, o in orgs.items()
+                   if norm_org(name) == norm_org(hint) or norm_org(o.get("name", "")) == norm_org(hint)}
+        domains = {d for d in domains if DOMAIN_RE.fullmatch(d) and not personal_domain(d)}
+        if len(domains) == 1:
+            domain = next(iter(domains))
+    error = ""
+    if domain and (not DOMAIN_RE.fullmatch(domain) or personal_domain(domain)):
+        error = "The company website could not be used safely; the person and organization remain unverified."
+    return {"company": hint, "domain": domain, "role": "" if role.startswith("at ") else role, "error": error, "nameOnly": not bool(domain)}
 
 
 def queue_mention(call_id, block, it, forced=False):
     """Put one mention on the research worker's queue (ahead of invitee research; up to MAX_WORKERS lookups run at once)."""
+    scope = person_mention_scope(block, it, load_records())
+    if scope["error"]:
+        update_mention(call_id, it["id"], lambda x, _r: x.update(status="notfound", person=None, candidates=[], note=scope["error"]))
+        return
     key = mention_key(call_id, it["id"])
     with RQ_LOCK:
         RQ.setdefault("mentions", {})[key] = {"type": "person", "callId": call_id, "id": it["id"], "name": it.get("name", ""),
-                                              "role": it.get("role", ""), "kind": it.get("kind", ""), "company": block.get("company", ""),
-                                              "domain": block.get("domain", ""), "forced": forced}
+                                              "role": scope["role"], "kind": it.get("kind", ""), "company": scope["company"],
+                                              "domain": scope["domain"], "companyNameOnly": scope["nameOnly"], "forced": forced}
         RQ["errors"].pop(key, None)
         if key not in RQ["pending"] and key not in RQ["running"]:
             RQ["queue"].append((key, True))
@@ -5305,11 +5392,11 @@ AUTO_OFF_NOTE = "Automatic look-up is off (Settings > Mentions and connections).
 AUTO_SOURCES = ("live", "meetily", "captions")   # found while the call runs: looked up on their own only with automatic look-up on
 
 
-def lookup_blocker(block, auto=False, records=None):
+def lookup_blocker(block, auto=False, records=None, allow_name_only=False):
     """Why mentions on this call can't be looked up on the web ("" when they can). auto: found while the call runs (notes as
     you type, Meetily), which only goes to the web by itself while Settings > Mentions > automatic look-up is on."""
     d = block.get("domain") or ""
-    if not d or personal_domain(d):
+    if (not d and not allow_name_only) or (d and personal_domain(d)):
         return "This call has no company web address, so Overture can't look people up for it."
     if not source_on("web", records):
         return WEB_OFF_NOTE
@@ -5362,6 +5449,8 @@ def _person_view(p):
             "seniority": clean_text(p.get("seniority"), 40), "tenure": clean_text(p.get("tenure"), 60),
             "relationship": rel if rel in RELATIONSHIPS else "", "confidence": str(p.get("confidence") or "") if p.get("confidence") in ("high", "medium") else "",
             "why": clean_text(p.get("why"), 200), "from": clean_text(p.get("from"), 40), "sources": srcs,
+            "inferred": bool(p.get("inferred")), "spokenName": clean_text(p.get("spokenName"), 100), "whyPossible": clean_text(p.get("whyPossible"), 200),
+            "organizationUnverified": bool(p.get("organizationUnverified")), "companyHint": clean_text(p.get("companyHint"), 120), "organizationLabel": clean_text(p.get("organizationLabel"), 160),
             "explanation": _explanation_view(p.get("explanation"), remap)}
 
 
@@ -5433,6 +5522,204 @@ def org_view(call_id, it, conns=None, block=None):
     return out
 
 
+
+def _assist_views(call_id, records):
+    block = (records.get("mentions") or {}).get(call_id) or {}
+    people = [mention_view(call_id, it, None, block=block) for it in block.get("items") or []]
+    orgs = [org_view(call_id, it, block=block) for it in block.get("orgs") or []]
+    return people, orgs
+
+
+def live_assist_view(call_id, records=None):
+    records = records if records is not None else load_records()
+    auto = ((records.get("callNotes") or {}).get(call_id) or {}).get("autoNotes") or {}
+    notes = auto.get("entries") or [] if isinstance(auto, dict) else []
+    people, orgs = _assist_views(call_id, records)
+    assist = _build_live_assist(call_id, notes, people, orgs, now_iso(), setting_on(records, "transcriptsInAI"))
+    assist["updatedAt"] = auto.get("updatedAt", "") if isinstance(auto, dict) else ""
+    semantic = dict(auto.get("semantic") or {}) if isinstance(auto, dict) else {}
+    enabled = setting_on(records, "transcriptsInAI")
+    status = semantic.get("status") or ("ready" if semantic.get("lastAt") else "off")
+    if not enabled:
+        status = "off"
+    assist["semantic"].update(status=status, mode="semantic" if enabled and semantic.get("lastAt") else "extractive", error=semantic.get("error", ""))
+    if enabled:
+        assist["semantic"]["note"] = "Automatic AI analysis selects key points and suggests term meanings from stable captions. Interpretations stay separate from exact quotes and are not independently verified."
+    if status == "unavailable":
+        assist["semantic"]["note"] = "AI analysis is unavailable; extractive notes remain active. " + semantic.get("error", "")
+    assist["pending"] = assist["pending"] or status in ("queued", "running")
+    return assist
+
+
+def _sync_auto_fact_notes(records, call_id):
+    """Called under the existing record lock, including when background research completes."""
+    assist = live_assist_view(call_id, records)
+    if not assist["notes"]:
+        return
+    note = records.setdefault("callNotes", {}).setdefault(call_id, {"text": ""})
+    prior = note.get("autoNotes") or {}
+    note["autoNotes"] = dict(prior, version=1, entries=assist["notes"], updatedAt=now_iso())
+
+
+def capture_auto_notes(call_id, lines, source, ctx=None):
+    """Extract key quoted sentences locally; do not send call text to a model or overwrite typed notes."""
+    with RECORDS_LOCK:
+        records = load_records()
+        block = (records.get("mentions") or {}).get(call_id) or {}
+        excluded = list((ctx or {}).get("orgs") or {}) + [o.get("name", "") for o in block.get("orgs") or []]
+        old = ((records.get("callNotes") or {}).get(call_id) or {}).get("autoNotes") or {}
+        fingerprints = dict(old.get("utteranceFingerprints") or {}) if isinstance(old, dict) else {}
+        def fingerprint(line):
+            return hashlib.sha256(json.dumps([line.get("text", ""), line.get("speaker", ""), line.get("time", "")], ensure_ascii=False).encode()).hexdigest()
+        # A service-worker replay or second connected panel may submit the same stable
+        # caption under a different segment id. Preserve its semantic notes and avoid
+        # charging for the same AI batch again; a changed quote/speaker is still revised.
+        lines = [line for line in lines if (fingerprints.get(str(line["id"])) != fingerprint(line) if line.get("id")
+                                           else not fingerprints.get("content:" + fingerprint(line)))]
+        if not lines:
+            return
+        saved = old.get("entries") or [] if isinstance(old, dict) else []
+        incoming = _extract_live_notes(call_id, lines, source, now_iso(), excluded)
+        revised_ids = {str(line["id"]) for line in lines if line.get("id")}
+        previous = [n for n in saved if n.get("utteranceId") in revised_ids]
+        # Replace only generated entries for a revised stable caption, keeping its raw history.
+        for fresh in incoming:
+            prior = next((n for n in reversed(previous) if n.get("utteranceId") == fresh.get("utteranceId") and n.get("kind") == fresh.get("kind")), None)
+            if prior and prior.get("heard") != fresh.get("heard"):
+                fresh["originalHeard"] = prior.get("originalHeard") or prior.get("heard", "")
+                fresh["heardHistory"] = list(prior.get("heardHistory") or []) + [prior.get("heard", "")]
+                fresh["captionRevised"] = True
+        saved_for_merge = [n for n in saved if n.get("utteranceId") not in revised_ids]
+        merged = _merge_live_notes(saved_for_merge, incoming)
+        if merged == saved and not block.get("items") and not block.get("orgs") and not setting_on(records, "transcriptsInAI"):
+            return
+        note = records.setdefault("callNotes", {}).setdefault(call_id, {"text": ""})
+        history = list(old.get("revisions") or []) if isinstance(old, dict) else []
+        for prior in previous:
+            if not any(n.get("id") == prior.get("id") and n.get("heard") == prior.get("heard") for n in incoming):
+                history.append(dict(prior, replacedAt=now_iso()))
+        versions = dict(old.get("utteranceVersions") or {}) if isinstance(old, dict) else {}
+        for line in lines:
+            uid = str(line.get("id") or hashlib.sha256((str(line.get("speaker", "")) + "|" + str(line.get("time", "")) + "|" + str(line.get("text", ""))).encode()).hexdigest()[:20])
+            versions[uid] = hashlib.sha256(str(line.get("text", "")).encode()).hexdigest()
+            if line.get("id"):
+                fingerprints[uid] = fingerprint(line)
+            fingerprints["content:" + fingerprint(line)] = True
+        note["autoNotes"] = dict(old if isinstance(old, dict) else {}, version=1, entries=merged, updatedAt=now_iso(), revisions=history,
+                                utteranceVersions=versions, utteranceFingerprints=fingerprints)
+        _sync_auto_fact_notes(records, call_id)
+        if len(json.dumps(records)) > MAX_RECORDS_BYTES:
+            raise Invalid("The records store is full; automatic notes could not be saved. Your existing notes were not changed.")
+        save_json(records_path(), records)
+    queue_live_semantic(call_id, lines, source)
+
+
+SEMANTIC_AUTOSTART = True
+SEMANTIC_STATE = PerUser(dict)
+SEMANTIC_LOCK = threading.Lock()
+SEMANTIC_CAPACITY = threading.Semaphore(2)
+
+
+def _semantic_status(call_id, status, error="", last_at=""):
+    with RECORDS_LOCK:
+        records = load_records()
+        note = records.setdefault("callNotes", {}).setdefault(call_id, {"text": ""})
+        auto = note.setdefault("autoNotes", {"version": 1, "entries": []})
+        old = auto.get("semantic") or {}
+        auto["semantic"] = dict(old, status=status, error=clean_text(error, 300))
+        if last_at:
+            auto["semantic"]["lastAt"] = last_at
+        save_json(records_path(), records)
+
+
+def queue_live_semantic(call_id, lines, source):
+    if not lines or not setting_on(load_records(), "transcriptsInAI"):
+        return False
+    if not claude_on():
+        _semantic_status(call_id, "unavailable", "Add a Claude key to enable automatic AI analysis; extractive notes remain active")
+        return False
+    with SEMANTIC_LOCK:
+        state = SEMANTIC_STATE.setdefault(call_id, {"pending": {}, "running": False, "scheduled": False})
+        for line in lines:
+            words = str(line.get("text") or "")
+            if not words.strip():
+                continue
+            uid = str(line.get("id") or hashlib.sha256((str(line.get("speaker", "")) + "|" + str(line.get("time", "")) + "|" + words).encode()).hexdigest()[:20])
+            state["pending"][uid] = dict(line, id=uid, source=source, text=words)
+        schedule = bool(state["pending"]) and not state["running"] and not state["scheduled"]
+        if schedule:
+            state["scheduled"] = True
+    if schedule:
+        _semantic_status(call_id, "queued")
+        if SEMANTIC_AUTOSTART:
+            timer = threading.Timer(2.0, contextvars.copy_context().run, args=(live_semantic_step, call_id))
+            timer.daemon = True
+            timer.start()
+    return schedule
+
+
+def live_semantic_step(call_id):
+    with SEMANTIC_LOCK:
+        state = SEMANTIC_STATE.get(call_id)
+        if not state or state["running"]:
+            return False
+        state["scheduled"] = False
+        if not setting_on(load_records(), "transcriptsInAI") or not claude_on():
+            state["pending"].clear()
+            return False
+        batch, size = [], 0
+        for uid, line in list(state["pending"].items()):
+            if batch and (size + len(line["text"]) > 10000 or len(batch) >= 24):
+                break
+            batch.append(line)
+            size += len(line["text"])
+            del state["pending"][uid]
+        if not batch:
+            return False
+        state["running"] = True
+    try:
+        _semantic_status(call_id, "running")
+        with SEMANTIC_CAPACITY:
+            # Check privacy again immediately before crossing the provider boundary.
+            if not setting_on(load_records(), "transcriptsInAI"):
+                _semantic_status(call_id, "off")
+                return False
+            status, response = claude_text(SEMANTIC_SYSTEM, json.dumps({"utterances": batch}, ensure_ascii=False), 1800, 12, retries=0)
+        if status != 200:
+            _semantic_status(call_id, "unavailable", str(response.get("error") or "AI analysis did not answer"))
+            return False
+        payload = extract_json(response.get("text", ""))
+        if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+            _semantic_status(call_id, "unavailable", "AI analysis returned invalid structured notes")
+            return False
+        cleaned = _clean_live_semantic(call_id, payload, batch, now_iso())
+        by_id = {str(line["id"]): line for line in batch}
+        with RECORDS_LOCK:
+            records = load_records()
+            if not setting_on(records, "transcriptsInAI"):
+                return False
+            note = records.setdefault("callNotes", {}).setdefault(call_id, {"text": ""})
+            auto = note.setdefault("autoNotes", {"version": 1, "entries": []})
+            versions = auto.get("utteranceVersions") or {}
+            fresh = [entry for entry in cleaned if versions.get(entry["utteranceId"]) == hashlib.sha256(by_id[entry["utteranceId"]]["text"].encode()).hexdigest()]
+            auto["entries"] = _merge_live_notes(auto.get("entries") or [], fresh)
+            auto["semantic"] = {"status": "ready", "error": "", "lastAt": now_iso()}
+            auto["updatedAt"] = now_iso()
+            if len(json.dumps(records)) > MAX_RECORDS_BYTES:
+                raise Invalid("Automatic AI notes could not fit in the records store; existing notes were not changed")
+            save_json(records_path(), records)
+        return True
+    except Exception as error:
+        _semantic_status(call_id, "unavailable", "AI analysis failed: " + type(error).__name__)
+        return False
+    finally:
+        with SEMANTIC_LOCK:
+            state["running"] = False
+            pending = list(state["pending"].values())
+        if pending:
+            queue_live_semantic(call_id, pending, pending[0].get("source") or "captions")
+
+
 def mentions_body(call_id, met=None, requeue=True):
     """GET /api/mentions?callId=: the people and companies mentioned on one call, and the call's connections for the map.
     A lookup left waiting (the server restarted) is queued again, and a company whose 30 seconds of waiting are over is looked up."""
@@ -5464,7 +5751,8 @@ def mentions_body(call_id, met=None, requeue=True):
     return {"callId": call_id, "company": str(block.get("company") or ""), "updatedAt": str(block.get("updatedAt") or ""),
             "claude": claude_on(), "items": [mention_view(call_id, it, met, conns, block) for it in items],
             "orgs": [org_view(call_id, it, conns, block) for it in block.get("orgs") or []],
-            "graph": {"mentioned": nodes, "relationships": edges}, "granola": granola_view(records, call_id)}
+            "graph": {"mentioned": nodes, "relationships": edges}, "granola": granola_view(records, call_id),
+            "assist": live_assist_view(call_id, records)}
 
 
 def settle_blocked(call_id):
@@ -5623,13 +5911,45 @@ def _from_node(speaker, ctx):
     return "p:" + a["email"] if a else ""
 
 
+def normalize_cued_names(lines):
+    """Capitalization-only normalization after contact cues, while retaining the exact raw quote.
+    Speech recognizers need not capitalize names consistently. This never changes spelling.
+    """
+    cue = re.compile(CONTACT + r"([A-Za-z][a-zA-Z'’-]*(?:\s+[A-Za-z][a-zA-Z'’-]*){0,3}?)\s+(from|at|in|on)\s+([A-Za-z][a-zA-Z0-9&.-]*)", re.I)
+    out = []
+    for line in lines:
+        raw = str(line.get("text") or "")
+        edits = []
+        for hit in cue.finditer(raw):
+            edits.append((hit.start(1), hit.end(1), hit.group(1).title()))
+            company = hit.group(3)
+            if company.islower() or company.isupper():
+                edits.append((hit.start(3), hit.end(3), company[0].upper() + company[1:]))
+        normalized = raw
+        for a, b, replacement in sorted(edits, reverse=True):
+            normalized = normalized[:a] + replacement + normalized[b:]
+        out.append(dict(line, text=normalized, rawText=raw))
+    return out
+
+
 def find_all(lines, ctx, hints=None, final=True):
     """People and companies talked about, with what the call itself says about them right after (local rules only).
     final: the text is complete (a transcript, or a saved note); while you are still typing, a company with no explanation yet waits."""
-    people = extract_mentions(lines, ctx, hints)
+    people = extract_mentions(normalize_cued_names(lines), ctx, hints)
     known = {norm_org(k) for k in ctx.get("orgs") or {}}
     people = [p for p in people if not (p["kind"] == "full" and norm_org(p["name"]) in known)]  # "Acme Freight" is a company Overture knows
     orgs = extract_orgs(lines, ctx, people)
+    named_orgs = {norm_org(o["name"]) for o in orgs}
+    for person in people:
+        if not str(person.get("role", "")).startswith("at "):
+            continue
+        company = person["role"][3:]
+        if norm_org(company) in named_orgs:
+            continue
+        hit = next((o for name, o in (ctx.get("orgs") or {}).items() if norm_org(name) == norm_org(company)), {})
+        orgs.append({"key": "o:" + norm_org(company), "name": company, "said": company, "domain": hit.get("domain", ""),
+                     "kind": "company", "count": 1, "quote": dict(person["quote"]), "si": person.get("si"), "relation": None})
+        named_orgs.add(norm_org(company))
     named = {norm_org(o["name"]) for o in orgs} | {norm_org(o["said"]) for o in orgs}
     people = [p for p in people if not (p["kind"] == "full" and norm_org(p["name"]) in named)]  # "Acme Robotics Inc": a company, not a person
     people = [p for p in people if not (p["kind"] == "partial" and p["name"] and norm_org(p["name"]) in named | known)]  # "Datadog from sales"
@@ -5702,13 +6022,17 @@ def save_mentions(call_id, ctx, found, source, orgs=None, bump=True, now=None, d
                   "role": f["role"], "kind": f["kind"], "count": f["count"], "quote": f["quote"], "source": source, "at": now_iso(),
                   "person": None, "candidates": [], "note": "", "confirmed": False, "added": False, "hubspot": "",
                   "said": f.get("said") or None, "fromNode": _from_node(f["quote"].get("speaker"), ctx), "autoFound": False}
+            scope = person_mention_scope(block, it, r)
+            if it.get("role", "").startswith("at "):
+                it.update(mentionedCompany=scope["company"], mentionedDomain=scope["domain"])
+            person_blocker = scope["error"] or lookup_blocker({"company": scope["company"], "domain": scope["domain"]}, auto, r, allow_name_only=scope["nameOnly"])
             if f["kind"] == "known":
                 it.update(status="known", person=dict(f["known"]))
             elif f.get("candidates"):
                 it.update(status="pick", candidates=[dict(c) for c in f["candidates"]],
                           note="People Overture already knows at " + (ctx["company"] or "this company") + " by that " + ("name" if f["name"] else "title") + ".")
-            elif blocker:
-                it.update(status=blocked_status(blocker), note=blocker)
+            elif person_blocker:
+                it.update(status=blocked_status(person_blocker), note=person_blocker)
             else:
                 it["status"] = "pending"
             block["items"].append(it)
@@ -5755,6 +6079,7 @@ def save_mentions(call_id, ctx, found, source, orgs=None, bump=True, now=None, d
             allm.pop(gone)
             sync_connections(r, gone)
         sync_connections(r, call_id)
+        _sync_auto_fact_notes(r, call_id)
         if len(json.dumps(r)) > MAX_RECORDS_BYTES:
             raise Invalid("the records store is full")
         save_json(records_path(), r)
@@ -5850,8 +6175,10 @@ def mentions_post(body, now=None):
         else:
             lines = (parse_transcript(c["text"]) if c["text"].strip() else []) + c["lines"]
         found, orgs = find_all(lines, ctx, c["hints"])
-        del lines, c["text"]  # the transcript goes no further
+        assist_lines = lines
+        del c["text"]  # only selected key sentences are saved as automatic notes, not the full transcript
         block, new, go, wait, new_o, unqueue = save_mentions(c["callId"], ctx, found, c["source"], orgs)
+        capture_auto_notes(c["callId"], assist_lines, c["source"], ctx)
     except Invalid as e:
         return 400, {"error": str(e)}
     except (GoogleError, NotConnected):
@@ -5877,7 +6204,7 @@ LIVE_SENT_END_RE = re.compile(r"[.!?…]+[\"'”’)]*(?=\s|$)")
 
 
 def clean_live(body):
-    _only(body, {"callId", "segment", "offset", "text", "final", "pause", "source"})
+    _only(body, {"callId", "segment", "offset", "text", "final", "pause", "source", "utterances"})
     if body.get("source", "live") not in ("live", "captions"):
         raise Invalid("source must be live or captions")
     cid = _str(body, "callId", 200, True)
@@ -5894,6 +6221,33 @@ def clean_live(body):
     return cid, seg, off, text, final, pause
 
 
+def clean_caption_utterances(body):
+    events = body.get("utterances", [])
+    if not isinstance(events, list) or len(events) > 50:
+        raise Invalid("utterances must be a list of at most 50 caption blocks")
+    if events and body.get("source") != "captions":
+        raise Invalid("utterances are only accepted for captions")
+    out, count = [], 0
+    for event in events:
+        if not isinstance(event, dict):
+            raise Invalid("caption block must be an object")
+        uid, words = event.get("id"), event.get("text")
+        if not isinstance(uid, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,80}", uid):
+            raise Invalid("caption block id is invalid")
+        if not isinstance(words, str) or len(words) > 1000 or not transcript_text_ok(words):
+            raise Invalid("caption block text must be at most 1000 characters")
+        if event.get("final") is not True:
+            raise Invalid("Only stable caption blocks may be saved; interim speech must remain unsaved")
+        speaker, clock = event.get("speaker", ""), event.get("time", "")
+        if not isinstance(speaker, str) or len(speaker) > 80 or not isinstance(clock, str) or len(clock) > 20:
+            raise Invalid("caption block speaker or time is invalid")
+        count += len(words)
+        if count > 16000:
+            raise Invalid("caption block batch is too large")
+        out.append({"id": uid, "text": words, "speaker": speaker, "time": clock})
+    return out
+
+
 def mentions_live(body, now=None):
     """POST /api/mentions/live {callId, segment, offset, text, final, pause}: the new part of a note you're typing in the in-call panel.
     Finds people and companies as you type; a company's relation waits for your next sentences (or 30 seconds) before a web lookup.
@@ -5904,11 +6258,12 @@ def mentions_live(body, now=None):
     now = now or datetime.now(timezone.utc)
     if not token_info():
         return 409, {"error": "Connect Google Calendar first, so Overture knows the call."}
-    if not mention_settings()["autoLookup"]:  # Settings > Mentions: off means nothing is read while you type
-        return 403, {"error": "Automatic look-up is off in Settings > Mentions and connections."}
+    # Automatic web lookup may be off while local extractive notes remain useful.
+    # save_mentions applies the existing setting before any research is queued.
     try:
         cid, seg, off, text, final, pause = clean_live(body)
         src = "captions" if body.get("source") == "captions" else "live"  # Google Meet's captions, read by the Chrome extension
+        validated_utterances = clean_caption_utterances(body) if "utterances" in body else None
         t = _time.time()
         with LIVE_LOCK:
             for k in [k for k, v in LIVE_SEGMENTS.items() if t - v["at"] > LIVE_TTL]:
@@ -5947,8 +6302,10 @@ def mentions_live(body, now=None):
         if mine and ready != full:  # what the whole note says now, so a sentence still being typed keeps what it found on a pause
             more = read(full)
             present |= {x["key"] for x in more[0] + more[1]}
+        assist_lines = validated_utterances if validated_utterances is not None else (parse_transcript(ready) if src == "captions" else [{"speaker": "Your note", "time": "", "text": ready}])
         del ready
         block, new, go, wait, new_o, unqueue = save_mentions(cid, ctx, found, src, orgs, bump=False, drop=mine - present)
+        capture_auto_notes(cid, assist_lines, src, ctx)
         mine = (mine & present) | {x["key"] for x in new + new_o}
         if not final:
             with LIVE_LOCK:
@@ -6062,10 +6419,14 @@ def mention_action(body):
                 if st not in ("found", "known") or not isinstance(p, dict) or len(norm_name(p.get("name", "")).split()) < 2:
                     err["e"] = "Pick who this is first."
                     return
-                key = (block.get("domain") or "") + "|" + norm_name(p["name"])
+                scope = person_mention_scope(block, x, r)
+                if scope["error"]:
+                    err["e"] = scope["error"]
+                    return
+                key = scope["domain"] + "|" + norm_name(p["name"])
                 r.setdefault("knownPeople", {})[key] = {
                     "name": clean_text(p.get("name"), 100), "title": clean_text(p.get("title"), 120), "team": clean_text(p.get("team"), 120),
-                    "relationship": str(p.get("relationship") or ""), "company": block.get("company", ""), "domain": block.get("domain", ""),
+                    "relationship": str(p.get("relationship") or ""), "company": scope["company"], "domain": scope["domain"],
                     "sources": (_person_view(p) or {}).get("sources", []), "fromCall": cid, "addedAt": now_iso()}
                 x.update(added=True, confirmed=True)
         saved = update_mention(cid, mid, apply)
@@ -6116,7 +6477,10 @@ def mention_hubspot(body):
         first, last, title = words[0], " ".join(words[1:]), clean_text(p.get("title"), 120)
         deadline = _time.time() + 15
         try:
-            info = hubspot_company(block["domain"], deadline) if block.get("domain") else None
+            scope = person_mention_scope(block, it, load_records())
+            if scope["error"]:
+                raise Invalid(scope["error"])
+            info = hubspot_company(scope["domain"], deadline) if scope["domain"] else None
             dup = api_call("hubspot", "POST", "/crm/v3/objects/contacts/search", {
                 "filterGroups": [{"filters": [{"propertyName": "firstname", "operator": "EQ", "value": first},
                                               {"propertyName": "lastname", "operator": "EQ", "value": last}]}],
@@ -6128,7 +6492,7 @@ def mention_hubspot(body):
         props = {"firstname": first, "lastname": last}
         if title:
             props["jobtitle"] = title
-        plan = {"properties": props, "company": {"id": info["id"], "name": info.get("name") or block.get("company", "")} if info else None}
+        plan = {"properties": props, "company": {"id": info["id"], "name": info.get("name") or scope["company"]} if info else None}
         plan_id = hashlib.sha256(json.dumps([mid, props, plan["company"] and plan["company"]["id"], it.get("hubspot")]).encode("utf-8")).hexdigest()[:16]
         public = {"firstname": first, "lastname": last, "jobtitle": title, "company": plan["company"]["name"] if plan["company"] else "",
                   "savedBefore": str(it.get("hubspot") or ""), "planId": plan_id}
@@ -6664,13 +7028,18 @@ def host_ok(headers):
 
 def read_guard_ok(headers):
     """Reads of private data: right host, and never as a script or fetch from another site."""
-    return host_ok(headers) and headers.get("Sec-Fetch-Site", "same-origin") in ("same-origin", "none")
+    expected = headers.get("X-OVERTURE-Account")
+    return (host_ok(headers) and headers.get("Sec-Fetch-Site", "same-origin") in ("same-origin", "none")
+            and (not HOSTED or not expected or account_id(expected) == _USER.get()))
 
 
 def write_guard_ok(headers):
     """Writes: right host, the X-OVERTURE header (other sites can't send it without a preflight we never answer), and our own Origin."""
     if not host_ok(headers) or headers.get("X-OVERTURE") != "1":
         return False
+    expected = headers.get("X-OVERTURE-Account")
+    if HOSTED and expected and account_id(expected) != _USER.get():
+        return False  # a stale tab must not write into the account another tab just signed in
     origin = headers.get("Origin")
     if origin:
         return origin in allowed_origins()
@@ -6814,6 +7183,14 @@ class Handler(SimpleHTTPRequestHandler):
             if cid and not CALLID_RE.match(cid):
                 return self.send_json(400, {"error": "bad callId"})
             return self.send_json(200, meetily_status(cid))
+        if path == "/api/live-assist":
+            if not read_guard_ok(self.headers):
+                return self.send_json(403, {"error": "not allowed"})
+            cid = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(self.path).query)).get("callId", "")
+            if not CALLID_RE.match(cid):
+                return self.send_json(400, {"error": "bad callId"})
+            return self.send_json(200, {"callId": cid, "accountEmail": str((token_info() or {}).get("email") or "").lower(),
+                                        "assist": mentions_body(cid)["assist"]})
         if path == "/api/mentions":
             if not read_guard_ok(self.headers):
                 return self.send_json(403, {"error": "not allowed"})
@@ -6972,7 +7349,7 @@ class Handler(SimpleHTTPRequestHandler):
             if not write_guard_ok(self.headers) or self.headers.get_content_type() != "application/json":
                 return self.send_json(403, {"error": "not allowed"})
             try:
-                body = self.read_json(MAX_MENTION_BODY if path == "/api/mentions" else 20_000)
+                body = self.read_json(MAX_MENTION_BODY if path == "/api/mentions" else 100_000 if path == "/api/mentions/live" else 20_000)
             except ValueError as e:
                 if str(e) == "size":
                     return self.send_json(413, {"error": "That transcript is too big (1 MB of text at most)."})

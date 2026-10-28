@@ -6,8 +6,18 @@
 (function () {
   "use strict";
   const { D, $, $$, esc, ic, plural, splitWhen, fmtDate, store, tenure, avatar, tagFor, coTile } = window.C;
+  const LA = window.OvertureLiveAssist;
   const CFG = window.CENTRALIZE_CONFIG || {};
   const qs = new URLSearchParams(location.search);
+  const EXTENSION_ID = "geemcgoloailklihnpghgindneohhccc";
+  const EXTENSION_ORIGIN = "chrome-extension://" + EXTENSION_ID;
+  // The connected tab uses a content script on our exact first-party origin. Its normal
+  // HttpOnly session stays here; no cookie, API key, or bearer token enters the extension.
+  const HOSTED_BRIDGE = window.parent === window && qs.get("host") === "ext" && qs.get("bridge") === EXTENSION_ID;
+  function extensionMessage(data) {
+    if (HOSTED_BRIDGE) window.postMessage(data, location.origin);
+    else if (window.parent !== window) window.parent.postMessage(data, EXTENSION_ORIGIN);
+  }
   // Meet first: Zoom's SDK assumes any iframe is the Zoom web client and would just wait inside Meet.
   // host=ext: Overture's Chrome extension side panel, which passes the tab's Meet code (meet=) or Zoom meeting number (zoom=).
   const HOST = qs.has("meet_sdk") ? "meet" : qs.get("host") === "ext" ? "ext" : (qs.get("host") === "zoom" || /ZoomApps/i.test(navigator.userAgent)) ? "zoom" : "preview";
@@ -38,7 +48,7 @@
   const autoLookup = () => !window.OvertureSettings || window.OvertureSettings.get().mentions.autoLookup !== false;
 
   // view: a guest's or a company's profile opened inside the current tab ({ kind: "person", email } or { kind: "org", name }), else null.
-  const state = { callId: window.C.inviteById(qs.get("call")) ? qs.get("call") : D.invites.length ? D.invites[0].id : null, ctx: null, tab: "brief", inCall: null, startedAt: Date.now(), hostNote: "", ticks: new Set(), open: null, view: null };
+  const state = { callId: window.C.inviteById(qs.get("call")) ? qs.get("call") : D.invites.length ? D.invites[0].id : null, ctx: null, tab: "brief", inCall: null, startedAt: Date.now(), hostNote: "", ticks: new Set(), open: null, view: null, streamEpoch: 0 };
   if (HOST === "ext") {
     const m = extMatch();
     if (m) state.callId = state.captionsCall = m.id; // captions are only read for a call this meeting matched, or one you pick
@@ -92,11 +102,14 @@
 
   // ---------- data ----------
   async function prepare() {
+    const id = state.callId, epoch = state.streamEpoch;
     const inv = window.C.inviteById(state.callId);
     if (!inv) { state.ctx = null; return; }
     const saved = store.get("inputs:" + inv.id);
     const inputs = saved || { versionFile: inv.versionFile || "", since: inv.backstageSince || null };
-    state.ctx = await window.C.runChecks(inv, inputs, null, 0);
+    const prepared = await window.C.runChecks(inv, inputs, null, 0);
+    if (state.callId !== id || state.streamEpoch !== epoch) return;
+    state.ctx = prepared;
     state.ticks = new Set(store.get("ticks:" + inv.id) || []);
   }
 
@@ -105,10 +118,11 @@
   function header() {
     const inv = window.C.inviteById(state.callId);
     const live = HOST !== "preview" || FRAMED;
+    const readerActive = HOST === "ext" ? !!(cc.box && cc.seenAt && Date.now() - cc.seenAt <= 15000 && !cc.readerError) : live;
     const count = { brief: 0, people: state.ctx ? state.ctx.people.length + mnCount() : 0, notes: (store.get("notes:" + state.callId) || []).length };
     return '<header class="p-head">' + (FRAMED ? "" : LOGO)
-      + '<div class="p-title"><h1>' + esc(inv.company) + '</h1><p class="p-meta"><span class="live-dot' + (live ? "" : " off") + '" aria-hidden="true"></span>'
-      + esc(live ? "Live in " + HOST_NAME : "Preview") + ' · <span id="timer" class="num">0:00</span></p></div>'
+      + '<div class="p-title"><h1>' + esc(inv.company) + '</h1><p class="p-meta"><span class="live-dot' + (readerActive ? "" : " off") + '" aria-hidden="true"></span>'
+      + esc(live ? HOST_NAME : "Preview") + ' · <span id="timer" class="num">0:00</span></p></div>'
       + '<a class="icon-btn p-open" href="index.html' + (window.C.MODE === "demo" ? "?demo=1" : "") + '#/calls/' + esc(inv.id) + '" target="_blank" rel="noopener" aria-label="Open the full brief in a new tab" title="Open the full brief">' + ic("maximize") + "</a></header>"
       + (state.hostNote ? '<p class="p-note">' + esc(state.hostNote) + "</p>" : "")
       + '<label class="p-pick"><span class="sr-only">Call</span><select id="callPick">' + D.invites.map((i) => '<option value="' + esc(i.id) + '"' + (i.id === state.callId ? " selected" : "") + ">" + esc(i.company + " · " + splitWhen(i.when).day + " " + splitWhen(i.when).start) + "</option>").join("") + "</select>" + ic("chevronDown") + "</label>"
@@ -236,12 +250,14 @@
 
   function notesPane() {
     const notes = store.get("notes:" + state.callId) || [];
-    return '<section class="p-notes"><ul class="p-note-list" role="list">' + (notes.length ? notes.map((n) => '<li><span class="p-note-kind pill ' + tagFor("note", n.kind) + '">' + esc(n.kind) + '</span><span class="num muted-line">' + esc(n.at) + "</span><p>" + esc(n.text) + "</p></li>").join("")
-      : '<li class="empty-line">No notes yet. They go to "After the call" in the full app.</li>') + "</ul>"
+    const manual = notes.filter((n) => !n || !n.assist);
+    return '<section class="p-notes"><h2 class="p-label">Add your own note</h2>'
       + '<form id="noteForm" class="p-compose"><label for="noteText" class="sr-only">Note</label><textarea id="noteText" rows="3" placeholder="Type a note">' + esc(live.draft) + "</textarea>"
       + '<div class="p-compose-row"><div class="chips" role="radiogroup" aria-label="Kind">'
       + ["Note", "Question", "Objection", "Next step"].map((k, i) => '<label class="chip-radio ' + tagFor("note", k) + '"><input type="radio" name="kind" value="' + k + '"' + (i === 0 ? " checked" : "") + "><span>" + k + "</span></label>").join("")
-      + '</div><button type="submit" class="btn primary sm">Save</button></div></form><p class="p-private">Only you can see this panel.</p></section>';
+      + '</div><button type="submit" class="btn primary sm">Save</button></div></form><p class="p-private">Only you can see this panel.</p>'
+      + '<h2 class="p-label">Your saved notes</h2><ul class="p-note-list" role="list">' + (manual.length ? manual.filter(Boolean).map((n) => '<li><span class="p-note-kind pill ' + tagFor("note", n.kind) + '">' + esc(n.kind) + '</span><span class="num muted-line">' + esc(n.at) + "</span><p>" + esc(n.text) + "</p></li>").join("")
+      : '<li class="empty-line">Automatic call notes appear below and in After the call.</li>') + '</ul><div id="automaticNotes">' + (LA ? LA.renderNotes(notes) : "") + '</div></section>';
   }
 
   // ---------- mentioned on the call: people and companies, found while the call runs ----------
@@ -249,6 +265,38 @@
   // the speaker to say how it relates). Notes you type are read as you type (POST /api/mentions/live, only the new text, 500 ms
   // after you stop). Demo: the sample transcript's results, tagged Sample; nothing is sent.
   const LIVE_MODE = window.C.MODE === "live";
+  const assist = { callId: null, data: null, error: "", timer: null, busy: false };
+  function refreshAssist() {
+    const target = $("#liveAssist");
+    if (target && LA) target.innerHTML = LA.renderFeed(assist.callId === state.callId ? assist.data : null, assist.error, { compact: state.tab === "notes" });
+    const notes = store.get("notes:" + state.callId) || [], automatic = $("#automaticNotes"), tab = $("#tab-notes");
+    if (automatic && LA) automatic.innerHTML = LA.renderNotes(notes);
+    if (tab) { let count = $(".p-count", tab); if (!count && notes.length) { count = document.createElement("span"); count.className = "p-count num"; tab.appendChild(count); } if (count) count.textContent = String(notes.length); }
+  }
+  function applyAssist(id, value, epoch) {
+    if (!LIVE_MODE || !LA || !value || id !== state.callId || (epoch !== undefined && epoch !== state.streamEpoch)) return;
+    assist.callId = id; assist.data = LA.normalize(value); assist.error = "";
+    const before = store.get("notes:" + id) || [], after = LA.mergeNotes(before, assist.data.notes);
+    if (JSON.stringify(before) !== JSON.stringify(after)) store.set("notes:" + id, after);
+    refreshAssist();
+  }
+  async function loadAssist() {
+    clearTimeout(assist.timer); assist.timer = null;
+    if (!LIVE_MODE || !LA || !state.callId) return;
+    const id = state.callId, epoch = state.streamEpoch;
+    try {
+      const r = await window.C.fetchTimeout("/api/live-assist?callId=" + encodeURIComponent(id), 7000);
+      if (!r.ok) throw new Error(r.status === 404 ? "Live assistance needs the updated Overture server." : "Overture's live-assistance server did not answer.");
+      const j = await r.json();
+      if (j.callId !== id) throw new Error("Overture returned a different call. Reload the panel.");
+      const expectedAccount = String(window.C.accountEmail || (D.me && D.me.email) || "").trim().toLowerCase();
+      if (j.accountEmail && String(j.accountEmail).toLowerCase() !== expectedAccount) throw new Error("Your signed-in account changed. Reload the panel.");
+      if (id === state.callId && epoch === state.streamEpoch) applyAssist(id, j.assist, epoch);
+    } catch (e) {
+      if (id === state.callId && epoch === state.streamEpoch) { assist.error = e.message || "Cannot reach Overture on this PC."; refreshAssist(); refreshListen(); }
+    }
+    if (id === state.callId && epoch === state.streamEpoch) assist.timer = setTimeout(loadAssist, assist.error ? 6000 : assist.data && assist.data.pending ? 1500 : 3500);
+  }
   const MN_TAG = { pending: ["Looking up…", "tag-blue"], found: ["Found", "tag-green"], known: ["Found", "tag-green"], pick: ["Likely, not confirmed", "tag-orange"],
     notfound: ["Not found", "tag-gray"], error: ["Couldn't look up", "tag-red"], nokey: ["Not looked up", "tag-gray"] };
   const ORG_TAG = { waiting: ["Listening…", "tag-blue"], pending: ["Looking up…", "tag-blue"], said: ["Said on the call", "tag-purple"], found: ["Found on the web", "tag-teal"],
@@ -259,7 +307,7 @@
   const mnPending = () => mn.items.some((x) => x.status === "pending") || mn.orgs.some((x) => x.status === "pending" || x.status === "waiting");
 
   async function loadMentions() {
-    const id = state.callId;
+    const id = state.callId, epoch = state.streamEpoch;
     if (window.C.MODE === "demo") {
       const sm = D.mentionSample;
       Object.assign(mn, { callId: id, items: sm && sm.callId === id ? sm.items : [], orgs: sm && sm.callId === id ? sm.orgs || [] : [] });
@@ -268,13 +316,14 @@
     if (!LIVE_MODE || !id) return;
     try {
       const r = await window.C.fetchTimeout("/api/mentions?callId=" + encodeURIComponent(id), 8000);
-      if (r.ok) applyMentions(id, await r.json()); else mnPoll();
+      if (r.ok) { const j = await r.json(); if (epoch === state.streamEpoch) applyMentions(id, j); } else mnPoll();
     } catch (e) { mnPoll(); } // the panel works without them; ask again in a moment while something is still being looked up
   }
   // The app around this panel (the panel runs in its own frame there) and any open People map refetch a call when its connections change.
   const mnBus = "BroadcastChannel" in window ? new BroadcastChannel("overture-mentions") : null;
   function applyMentions(id, j) {
-    if (id !== state.callId || !j) return;
+    if (id !== state.callId || !j || j.callId !== id) return;
+    if (j.assist) applyAssist(id, j.assist);
     const before = JSON.stringify([mn.callId, mn.items, mn.orgs]);
     Object.assign(mn, { callId: id, items: j.items || [], orgs: j.orgs || [] });
     const graph = window.C.mergeConnections(id, j.graph);
@@ -351,35 +400,58 @@
   // Notes, read as you type: only the new text goes to Overture's own server (500 ms after you stop typing); saving the note finishes it.
   // The server reads finished sentences as they come; a 1.5 s pause reads the rest, and saving the note ends it. Whatever the note
   // no longer says ("John Sm" once it reads "John Smith") is taken back, so the draft is kept when the panel redraws (draft).
-  const live = { seg: "", sent: "", timer: null, idle: null, busy: false, next: null, paused: "", draft: "", source: "live" };
+  const live = { seg: "", sent: "", timer: null, idle: null, busy: false, next: null, paused: "", draft: "", source: "live", ownerCall: state.callId, epoch: state.streamEpoch };
   const newSeg = () => (Math.random().toString(36).slice(2, 10) + Date.now().toString(36)).replace(/[^a-z0-9]/g, "").slice(0, 32);
   // st: whose text this is: `live` (your note) or `cc` (Google Meet's captions); each keeps its own place in the text.
   async function sendLive(text, final, pause, st) {
     st = st || live;
-    if (!LIVE_MODE || !state.callId || text.length > 8000 || !autoLookup()) return; // Settings > Mentions: automatic look-up can be off
+    if (!LIVE_MODE || !state.callId || text.length > 8000 || (st.source !== "captions" && !autoLookup())) return;
+    // Caption notes are captured locally even when external automatic research is off.
+    if (st.ownerCall && st.ownerCall !== state.callId) return;
+    if (st.epoch !== undefined && st.epoch !== state.streamEpoch) return;
+    st.ownerCall = state.callId; st.epoch = state.streamEpoch; st.latest = text;
     // While one send runs: a finishing send waits in its own list and goes first, so a later send can never replace it.
     if (st.busy) { if (final) { (st.fins = st.fins || []).push(text); st.next = null; } else st.next = [text, final, pause]; return; }
     if (!st.seg) { st.seg = newSeg(); st.sent = ""; }
     let off = 0;
     while (off < st.sent.length && off < text.length && st.sent[off] === text[off]) off++;
     const part = text.slice(off);
-    if (!part && !final && !(pause && st.paused !== text)) return;
+    if (!part && !final && !(pause && st.paused !== text) && !(st.utterances && st.utterances.size)) return;
     if (pause) st.paused = text;
     st.busy = true;
-    const id = state.callId, seg = st.seg;
+    const id = state.callId, seg = st.seg, epoch = st.epoch;
+    const current = () => id === state.callId && epoch === state.streamEpoch && st.ownerCall === id && st.epoch === epoch;
+    const wire = part.slice(0, 4000), wireFinal = !!final && part.length <= 4000;
+    const utterances = []; let utteranceChars = 0;
+    if (st.source === "captions" && st.utterances) for (const value of st.utterances.values()) {
+      if (utterances.length >= 50 || utteranceChars + value.text.length > 16000) break;
+      utterances.push(value); utteranceChars += value.text.length;
+    }
     try {
-      const j = await window.C.postJson("/api/mentions/live", { callId: id, segment: seg, offset: off, text: part.slice(0, 4000), final: !!final, pause: !!pause,
-        source: st.source }, 15000);
-      st.sent = final ? "" : text;
-      if (final && st.seg === seg) st.seg = "";
+      const j = await window.C.postJson("/api/mentions/live", { callId: id, segment: seg, offset: off, text: wire, final: wireFinal, pause: !!pause,
+        source: st.source, ...(utterances.length ? { utterances } : {}) }, 15000);
+      if (!current()) return;
+      utterances.forEach((u) => { if (st.utterances && st.utterances.get(u.id) === u) st.utterances.delete(u.id); });
+      clearTimeout(st.retry); st.retry = null; st.errors = 0;
+      st.sent = wireFinal ? "" : text.slice(0, off) + wire;
+      if (wireFinal && st.seg === seg) st.seg = "";
+      if (wire.length < part.length || (st.utterances && st.utterances.size)) st.next = [text, final, pause];
+      if (st.source === "captions") { assist.error = ""; refreshListen(); }
       applyMentions(id, j);
       if (j.found && id === state.callId) announce(plural(j.found, "new mention") + (st === live ? " found in your note." : " heard on the call."));
     } catch (e) {
+      if (!current()) return;
       // the server lost the note (it restarted): send it all again, once
       if (e.message === "resend" && off) { st.seg = ""; st.sent = ""; st.paused = ""; if (!st.next) st.next = [text, final, pause]; }
       // a finishing send that failed still ends its part here: the next text starts a new part, never overwriting the old one
       else if (final && st.seg === seg) { st.seg = ""; st.sent = ""; st.paused = ""; }
+      else if (st.source === "captions") {
+        assist.error = e.message || "Cannot reach Overture's live-assistance server."; refreshAssist(); refreshListen();
+        clearTimeout(st.retry); st.errors = (st.errors || 0) + 1;
+        st.retry = setTimeout(() => { if (current()) sendLive(st.latest || text, false, true, st); }, Math.min(15000, 2000 * st.errors));
+      }
     }
+    if (!current()) return;
     st.busy = false;
     if (st.fins && st.fins.length) { sendLive(st.fins.shift(), true, false, st); return; }
     if (st.next) { const [t, f, p] = st.next; st.next = null; sendLive(t, f, p, st); }
@@ -389,28 +461,55 @@
   // Each finished line ("Name: words") is read for people and companies as it comes, like a note you type. When you leave the
   // call (or it's past its end time), the whole caption transcript is read once more for After the call. The transcript stays in
   // this panel: Overture's server keeps only who and what was mentioned, with one sentence each.
-  const cc = { seg: "", sent: "", busy: false, next: null, paused: "", source: "captions", lines: [], segStart: 0, idle: null, lastAt: 0, posted: false };
-  const ccText = () => cc.lines.slice(cc.segStart).join("\n");
+  const captionState = (ownerCall, epoch, switched) => ({ seg: "", sent: "", busy: false, next: null, paused: "", source: "captions", lines: [], segStart: 0, idle: null, retry: null, lastAt: 0, posted: false,
+    ownerCall, epoch, events: new Map(), utterances: new Map(), floorAt: switched ? Date.now() : 0, discardTabTranscript: !!switched });
+  let cc = captionState(state.callId, state.streamEpoch, false);
+  const ccText = (stream) => { stream = stream || cc; return stream.lines.slice(stream.segStart).join("\n"); };
   window.addEventListener("message", (e) => {
-    // Only the extension's side panel frames this page (the server's frame-ancestors says so), and it is our parent.
-    if (e.source !== window.parent || !/^chrome-extension:\/\//.test(e.origin) || !e.data || !LIVE_MODE) return;
-    if (e.data.type === "overture-captions" && Array.isArray(e.data.lines)) captionLines(e.data.lines);
-    if (e.data.type === "overture-call-ended") captionsDone("left", e.data.lines);
+    const fromFrame = window.parent !== window && e.source === window.parent && e.origin === EXTENSION_ORIGIN;
+    const fromBridge = HOSTED_BRIDGE && e.source === window && e.origin === location.origin && e.data && e.data.extensionOrigin === EXTENSION_ORIGIN;
+    if (HOST !== "ext" || (!fromFrame && !fromBridge) || !e.data) return;
+    if (e.data.type === "overture-extension-ready") {
+      extensionMessage({ type: "overture-panel-ready", live: LIVE_MODE, connected: LIVE_MODE, callId: state.callId || null, captionsReady: captionsOn() });
+      return;
+    }
+    if (!LIVE_MODE) return;
+    if (e.data.type === "overture-captions" && Array.isArray(e.data.lines)) captionLines(e.data.lines, e.data.events);
+    if (e.data.type === "overture-call-ended") captionsDone("left", e.data.lines, e.data.events);
     if (e.data.type === "overture-captions-status") { // the Meet tab's reader checks in every 3 s: running, and whether CC is on
       const was = cc.box;
-      cc.box = !!e.data.box; cc.seenAt = Date.now();
-      if (was !== cc.box) refreshListen();
+      cc.box = !!e.data.box; cc.seenAt = Date.now(); cc.parentOrigin = e.origin;
+      cc.readerError = typeof e.data.error === "string" ? e.data.error.slice(0, 240) : "";
+      const indicator = $(".p-meta .live-dot");
+      if (indicator) indicator.classList.toggle("off", !cc.box || !!cc.readerError);
+      if (was !== cc.box || cc.readerError) refreshListen();
     }
   });
   // Captions count only for the call this meeting matched, or one you picked: never for whichever call the list shows first.
   const captionsOn = () => !!state.callId && state.captionsCall === state.callId;
-  function captionLines(lines) {
-    const add = lines.filter((l) => typeof l === "string" && l.trim()).map((l) => l.trim().slice(0, 600)).slice(0, 50);
+  function cleanCaptionEvents(events) {
+    return (Array.isArray(events) ? events : []).slice(0, 50).filter((e) => e && e.final === true && typeof e.id === "string" && /^[a-zA-Z0-9:_-]{1,80}$/.test(e.id)
+      && typeof e.text === "string" && e.text.trim() && (!e.at || !cc.floorAt || Number(e.at) >= cc.floorAt))
+      .map((e) => ({ id: e.id, text: e.text.trim().slice(0, 1000), speaker: String(e.speaker || "").slice(0, 80), time: String(e.time || "").slice(0, 12), at: Number(e.at) || Date.now(), final: true }));
+  }
+  const captionLine = (event) => (event.time ? "[" + event.time + "] " : "") + (event.speaker || "Speaker") + ": " + event.text;
+  function captionLines(lines, events) {
+    const utterances = cleanCaptionEvents(events);
+    const add = utterances.length ? utterances.map((event) => ({ line: captionLine(event), event }))
+      : (Array.isArray(events) && events.length ? [] : lines.filter((l) => typeof l === "string" && l.trim()).map((l) => ({ line: l.trim().slice(0, 1100) })).slice(0, 50));
     if (!add.length || !captionsOn()) return;
-    const before = ccText();
-    if (before && before.length + add.join("\n").length > 6000) { sendLive(before, true, false, cc); cc.segStart = cc.lines.length; } // a new part every ~6,000 letters
-    cc.lines.push(...add);
-    if (cc.lines.length > 20000) { const cut = cc.lines.length - 20000; cc.lines.splice(0, cut); cc.segStart = Math.max(0, cc.segStart - cut); }
+    for (const item of add) {
+      const previous = item.event && cc.events.get(item.event.id);
+      if (previous !== undefined && cc.lines[previous] === item.line) continue;
+      if (item.event) cc.utterances.set(item.event.id, item.event);
+      if (previous !== undefined) { cc.lines[previous] = item.line; continue; }
+      // Close the old segment before adding the next complete caption; never silently drop a >8k batch.
+      const before = ccText();
+      if (before && before.length + item.line.length + 1 > 6000) { sendLive(before, true, false, cc); cc.segStart = cc.lines.length; }
+      if (item.event) cc.events.set(item.event.id, cc.lines.length);
+      else if (cc.lines[cc.lines.length - 1] === item.line) continue;
+      cc.lines.push(item.line);
+    }
     cc.lastAt = Date.now();
     cc.posted = false;
     sendLive(ccText(), false, false, cc);
@@ -422,19 +521,22 @@
   }
   // The call is over: read the whole caption transcript once, the same way an uploaded transcript is read. The Meet tab's own
   // copy (sent when you leave) wins when it's longer: this panel may have reloaded during the call.
-  async function captionsDone(why, all) {
-    const tab = Array.isArray(all) ? all.filter((l) => typeof l === "string" && l.trim()).map((l) => l.trim().slice(0, 600)) : [];
+  async function captionsDone(why, all, events) {
+    const stream = cc, id = state.callId, epoch = state.streamEpoch;
+    const finalEvents = cleanCaptionEvents(events);
+    if (finalEvents.length) captionLines([], finalEvents);
+    const tab = stream.discardTabTranscript ? [] : Array.isArray(all) ? all.filter((l) => typeof l === "string" && l.trim()).map((l) => l.trim().slice(0, 1100)) : [];
     const lines = tab.length > cc.lines.length ? tab : cc.lines;
     if (cc.posted || !lines.length || !captionsOn() || !LIVE_MODE) return;
     cc.posted = true;
     clearTimeout(cc.idle);
-    const id = state.callId;
     if (cc.lines.length) sendLive(ccText(), true, false, cc);
     try {
       const j = await window.C.postJson("/api/mentions", { callId: id, text: lines.join("\n").slice(0, 900000), source: "captions" }, 60000);
+      if (id !== state.callId || epoch !== state.streamEpoch || stream !== cc) return;
       applyMentions(id, j);
       announce((why === "left" ? "Call ended. " : "") + "Overture read the whole caption transcript for After the call.");
-    } catch (e) { cc.posted = false; announce("Couldn't read the call's captions: " + e.message); }
+    } catch (e) { if (id === state.callId && epoch === state.streamEpoch && stream === cc) { cc.posted = false; assist.error = "Could not finish reading this call's captions: " + e.message; refreshAssist(); announce(assist.error); } }
     refreshListen();
   }
   // Past the call's end time and no captions for 2 minutes: treat it as over (in case leaving the call wasn't seen).
@@ -444,6 +546,7 @@
   }, 30000);
   function captionsLine() {
     if (!LIVE_MODE) return "";
+    if (cc.readerError) return '<p class="p-listen"><span class="live-dot off" aria-hidden="true"></span>' + esc(cc.readerError) + '</p>';
     if (qs.get("meet") && !captionsOn()) return '<p class="p-listen"><span class="live-dot off" aria-hidden="true"></span>Pick this meeting\'s call above so Overture can read its captions.</p>';
     if (!cc.lines.length) {
       if (!qs.get("meet")) return "";
@@ -452,6 +555,7 @@
       if (!cc.box) return off("Turn on captions (CC) in Meet and Overture finds who and what is mentioned. Let everyone know you're taking AI notes.");
       return '<p class="p-listen on"><span class="live-dot" aria-hidden="true"></span>Captions are on. Waiting for someone to speak…</p>';
     }
+    if (assist.error) return '<p class="p-listen"><span class="live-dot off" aria-hidden="true"></span>Captions received; live assistance is unavailable. Check the Overture connection and the error above.</p>';
     return '<p class="p-listen on"><span class="live-dot" aria-hidden="true"></span>Reading Meet captions · <span class="num">' + esc(plural(cc.lines.length, "line")) + "</span>"
       + (cc.posted ? " · read for After the call" : ' · <button type="button" class="link-btn" data-cc-done>Call over? Find everyone mentioned</button>') + "</p>";
   }
@@ -507,13 +611,14 @@
     if (!state.ctx) {
       $("#app").innerHTML = '<header class="p-head">' + (FRAMED ? "" : LOGO) + '<div class="p-title"><h1>Overture</h1><p class="p-meta">No calls yet</p></div></header>'
         + (state.hostNote ? '<p class="p-note">' + esc(state.hostNote) + "</p>" : "")
-        + '<p class="p-empty">' + (window.C.MODE === "connect" ? 'Connect your Google Calendar in the <a href="index.html#/home" target="_blank" rel="noopener">Overture app' + window.C.NEW_TAB + "</a> to see your calls here." : "No calls with outside guests in the next 14 days.") + "</p>";
+        + '<p class="p-empty">' + (window.C.MODE === "connect" ? HOSTED_BRIDGE ? '<a href="/auth/google">Sign in with Google</a> to connect your calendar. This tab returns to your meeting panel after sign-in.' : 'Connect your Google Calendar in the <a href="index.html#/home" target="_blank" rel="noopener">Overture app' + window.C.NEW_TAB + "</a> to see your calls here." : "No calls with outside guests in the next 14 days.") + "</p>";
       return;
     }
     const panes = { brief: briefPane, people: peoplePane, notes: notesPane };
     if (!tabsShown().includes(state.tab)) state.tab = "brief";
     document.documentElement.dataset.panelDensity = panelPrefs() ? panelPrefs().density : "full";
-    $("#app").innerHTML = header() + '<div id="pane" role="tabpanel" aria-labelledby="tab-' + state.tab + '" class="p-pane">' + (state.view ? viewPane() : panes[state.tab]()) + "</div>";
+    $("#app").innerHTML = header() + (LIVE_MODE && LA ? '<section id="liveAssist" class="p-live-assist" aria-label="Automatic live assistance" aria-live="polite">' + LA.renderFeed(assist.callId === state.callId ? assist.data : null, assist.error, { compact: state.tab === "notes" }) + '</section>' : '')
+      + '<div id="pane" role="tabpanel" aria-labelledby="tab-' + state.tab + '" class="p-pane">' + (state.view ? viewPane() : panes[state.tab]()) + "</div>";
     if (mini) { mini.destroy(); mini = null; }
     if (state.tab === "people" && !state.view && window.CMap && $("#miniMap")) mini = window.CMap.mount($("#miniMap"), { mode: "stack", callId: state.callId, compact: true });
   }
@@ -583,11 +688,25 @@
   });
   document.addEventListener("change", async (e) => {
     if (e.target.id === "callPick") {
+      if (!window.C.inviteById(e.target.value) || e.target.value === state.callId) return;
       clearTimeout(live.timer); clearTimeout(live.idle);
-      if (live.seg && (live.draft.trim() || live.sent)) sendLive(live.draft.trim() ? live.draft : live.sent, true, false); // the old call's note is done: the server drops its text now
+      clearTimeout(live.retry); clearTimeout(cc.idle); clearTimeout(cc.retry); clearTimeout(mn.timer); mn.timer = null;
+      // Send a private final snapshot to the OLD call before invalidating all old callbacks and buffers.
+      if (live.seg && (live.draft.trim() || live.sent)) sendLive(live.draft.trim() ? live.draft : live.sent, true, false,
+        Object.assign({}, live, { busy: false, next: null, fins: [], seg: newSeg(), sent: "" }));
+      if (cc.lines.length && !cc.posted) sendLive(ccText(), true, false,
+        Object.assign({}, cc, { busy: false, next: null, fins: [], seg: newSeg(), sent: "", utterances: new Map(cc.utterances) }));
+      state.streamEpoch++;
       state.callId = state.captionsCall = e.target.value; state.open = null; state.view = null;
-      Object.assign(live, { seg: "", sent: "", next: null, fins: [], paused: "", draft: "" }); // nothing queued for the old call may go to the new one
+      cc = captionState(state.callId, state.streamEpoch, true);
+      Object.assign(live, { seg: "", sent: "", next: null, fins: [], paused: "", draft: "", latest: "", busy: false, ownerCall: state.callId, epoch: state.streamEpoch });
+      clearTimeout(assist.timer); Object.assign(assist, { callId: state.callId, data: null, error: "", timer: null });
+      Object.assign(mn, { callId: state.callId, items: [], orgs: [] });
+      state.startedAt = Date.now();
+      if (HOST === "ext") extensionMessage({ type: "overture-captions-reset" });
+      if (HOST === "ext") extensionMessage({ type: "overture-panel-ready", live: LIVE_MODE, connected: LIVE_MODE, callId: state.callId, captionsReady: captionsOn() });
       await prepare(); await loadMentions(); render(); announce("Showing " + window.C.inviteById(state.callId).company + ".");
+      loadAssist();
       if (mt.st && mt.st.recording) meetilyPick(); // the call picked here is the one Meetily is recording
       return;
     }
@@ -630,6 +749,7 @@
     window.C.watchResearch(() => (state.view && state.view.kind === "person" ? [state.view.email] : state.ctx && state.tab === "people" ? state.ctx.people.map((p) => p.email) : []),
       refreshPeople, () => (state.ctx ? [state.ctx.invite.company] : []));
     meetilyPoll();
+    loadAssist();
     try {
       if (HOST === "meet") await within(connectMeet(), 9000); // Meet expects a session within about 10 s
       else if (HOST === "zoom") await connectZoom();

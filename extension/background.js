@@ -1,32 +1,51 @@
-// Overture's in-call panel in Chrome's side panel, on Google Meet and Zoom web-client tabs only.
-// This extension sends nothing anywhere: the side panel shows Overture from this PC (http://localhost:3576), nothing else.
-// Without the "tabs" permission Chrome only tells us the address of tabs on the sites in host_permissions, which is all we need.
 "use strict";
-
-const MEETING_SITES = [/^https:\/\/meet\.google\.com\//, /^https:\/\/([a-z0-9-]+\.)*zoom\.us\//];
-const isMeeting = (url) => typeof url === "string" && MEETING_SITES.some((re) => re.test(url));
-
-// The toolbar button opens the panel (where it is turned on: meeting tabs).
+importScripts("config.js");
+const E = OvertureExtension;
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
-
 async function setFor(tabId, url) {
-  try {
-    await chrome.sidePanel.setOptions(isMeeting(url) ? { tabId, path: "sidepanel.html", enabled: true } : { tabId, enabled: false });
-  } catch (e) { /* the tab closed meanwhile */ }
+  try { await chrome.sidePanel.setOptions(E.meetingParams(url).meet ? { tabId, path: "sidepanel.html", enabled: true } : { tabId, enabled: false }); } catch (_) {}
 }
-
-chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
-  if (info.url || info.status === "complete") setFor(tabId, tab.url);
-});
-chrome.tabs.onActivated.addListener(async ({ tabId }) => {
-  try { const tab = await chrome.tabs.get(tabId); setFor(tabId, tab.url); } catch (e) { /* gone */ }
-});
+chrome.tabs.onUpdated.addListener((id, info, tab) => { if (info.url || info.status === "complete") setFor(id, tab.url); });
+chrome.tabs.onActivated.addListener(async ({ tabId }) => { try { const tab = await chrome.tabs.get(tabId); await setFor(tabId, tab.url); } catch (_) {} });
 chrome.runtime.onInstalled.addListener(async () => {
-  try { (await chrome.tabs.query({})).forEach((t) => setFor(t.id, t.url)); } catch (e) { /* nothing to do */ }
-  // Installed or reloaded mid-call: Chrome only adds captions.js to Meet tabs that load from now on, so add it to the Meet tabs
-  // already open too (the copy from before the reload switches itself off).
+  const tabs = await chrome.tabs.query({});
+  await Promise.all(tabs.map(async (tab) => {
+    await setFor(tab.id, tab.url);
+    if (E.meetingParams(tab.url).meet) await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["config.js", "captions.js"] }).catch(() => {});
+    if (E.panelInfo(tab.url)) await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["config.js", "hosted-bridge.js"] }).catch(() => {});
+  }));
+});
+// A normal Overture tab uses first-party cookies. Credentials never pass through the extension.
+async function panelTargets(meetTab) {
+  const meet = E.meetingParams(meetTab.url).meet;
+  if (!meet) return [];
+  return (await chrome.tabs.query({ url: E.origin + "/panel.html*" })).filter((tab) => {
+    const panel = E.panelInfo(tab.url);
+    return panel && panel.tabId === meetTab.id && panel.meet === meet;
+  });
+}
+async function readerForPanel(sender, type) {
+  const panel = sender.tab && E.panelInfo(sender.tab.url);
+  if (!panel || sender.frameId !== 0) throw new Error("Unrecognized Overture panel.");
+  const meet = await chrome.tabs.get(panel.tabId);
+  if (E.meetingParams(meet.url).meet !== panel.meet) throw new Error("This Meet tab has closed or changed meetings.");
+  return chrome.tabs.sendMessage(panel.tabId, { type });
+}
+chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  if (!message || sender.id !== chrome.runtime.id) return;
+  if (["overture-captions", "overture-captions-status", "overture-call-ended"].includes(message.type) && sender.tab && sender.frameId === 0 && E.meetingParams(sender.tab.url).meet) {
+    panelTargets(sender.tab).then((tabs) => Promise.all(tabs.map((tab) => chrome.tabs.sendMessage(tab.id, { ...message, meetTabId: sender.tab.id }).catch(() => {})))).catch(() => {});
+  } else if (["overture-captions-snapshot", "overture-captions-reset"].includes(message.type)) {
+    readerForPanel(sender, message.type).then(respond, (error) => respond({ error: error.message }));
+    return true;
+  }
+});
+// If a Meet tab closes before pagehide can deliver, finalize the transcript already received.
+chrome.tabs.onRemoved.addListener(async (tabId) => {
   try {
-    const meets = (await chrome.tabs.query({})).filter((t) => /^https:\/\/meet\.google\.com\//.test(t.url || ""));
-    await Promise.all(meets.map((t) => chrome.scripting.executeScript({ target: { tabId: t.id }, files: ["captions.js"] }).catch(() => {})));
-  } catch (e) { /* no Meet tab open */ }
+    const tabs = await chrome.tabs.query({ url: E.origin + "/panel.html*" });
+    await Promise.all(tabs.filter((tab) => { const p = E.panelInfo(tab.url); return p && p.tabId === tabId; })
+      .map((tab) => chrome.tabs.sendMessage(tab.id, { type: "overture-call-ended", meetTabId: tabId, lines: [], events: [], box: false }).catch(() => {})));
+    chrome.runtime.sendMessage({ type: "overture-meet-tab-closed", meetTabId: tabId }).catch(() => {});
+  } catch (_) {}
 });

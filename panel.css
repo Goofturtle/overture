@@ -175,6 +175,28 @@ body { font-size: 14px; background: var(--surface); }
 /* Meetily: "Listening via Meetily" while its transcript comes in for this call. */
 .p-listen.on { color: var(--ink-2); font-weight: 500; }
 .p-listen .link-btn { font-size: 12px; }
+.p-live-assist { margin: 10px 16px 0; min-width: 0; }
+.la-feed-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 0 4px; }
+.la-feed-head h2, .la-auto-notes h2 { margin: 0; font-size: 13px; font-weight: 700; }
+.la-card { margin: 8px 0; padding: 12px; border: 1px solid var(--line); border-left: 3px solid var(--accent, #1ed760); border-radius: var(--r-md, 10px); background: var(--surface-2); overflow-wrap: anywhere; }
+.la-card-head { display: flex; gap: 8px; justify-content: space-between; align-items: flex-start; font-size: 10px; line-height: 1.5; }
+.la-kind { color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.la-status { color: var(--ink-2); text-align: right; font-weight: 600; }
+.la-card h3 { margin: 7px 0 4px; font-size: 14px; line-height: 1.4; }
+.la-card p { margin: 4px 0; font-size: 12px; line-height: 1.5; }
+.la-card .la-heard { color: var(--muted); font-size: 11px; }
+.la-uncertain { border-left-color: #d69535; }
+.la-error { padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-md, 10px); color: var(--ink-2); background: var(--surface-2); font-size: 12px; line-height: 1.5; }
+.la-card.la-error { border-left-color: #c96666; }
+.la-source { display: block; color: var(--muted); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.la-source a { color: inherit; text-underline-offset: 2px; }
+.la-empty { padding: 4px 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.la-auto-notes { margin-bottom: 20px; }
+.la-auto-notes > .p-hint { margin-top: 6px; }
+.la-note-evidence { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 11px; }
+.p-note-list .la-source { grid-column: 1 / -1; }
+.la-uncertain-title { margin: 18px 0 6px; font-size: 13px; }
+.la-uncertain-notes { border-left: 2px solid #d69535; padding-left: 10px; }
 .p-mns .xp > summary { font-size: 12px; min-height: 24px; }
 .p-mns .xp > .xp-card { padding: 10px 12px; font-size: 12px; }
 
