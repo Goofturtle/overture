@@ -587,7 +587,7 @@
     const viewSeg = '<div class="seg cal-views" role="group" aria-label="Show">' + [["week", "Week"], ["priority", "By priority"]].map(([k, l]) => '<button type="button" data-cal-view="' + k + '" aria-pressed="' + (CAL.view === k) + '">' + l + "</button>").join("") + "</div>";
     if (CAL.view === "priority") {
       // Every upcoming call, hottest account first (Settings > Account priorities), each with its badge and why.
-      const list = D.invites.map((inv, i) => ({ inv, i, p: C.priority(inv.company) })).sort((a, b) => b.p.score - a.p.score || a.i - b.i);
+      const list = D.invites.filter((inv) => !inv.ended).map((inv, i) => ({ inv, i, p: C.priority(inv.company) })).sort((a, b) => b.p.score - a.p.score || a.i - b.i);
       sec.innerHTML = '<header class="page-head cal-top"><div class="page-head-row"><h1 class="page-title" tabindex="-1">Calls</h1>' + srcTag(SRC.calendar) + viewSeg
         + '<span class="grow"></span><p class="cal-sum">' + plural(list.length, "call") + ' · <a href="#/settings/priorities">Priority rules</a></p></div></header>'
         + (list.length ? '<ol class="prio-list" role="list">' + list.map(({ inv, p }) => '<li class="prio-item">' + calEvent(inv, "ag-ev")
@@ -606,7 +606,7 @@
       + '<div class="cal-body"><div class="cal-gutter" aria-hidden="true">' + gutter + "</div>"
       + '<div class="cal-days" style="height:' + (end - start) * H + 'px"><div class="cal-lines" aria-hidden="true">' + lines + "</div>" + cols + "</div></div></div>"
       + '<div class="agenda">' + agenda + "</div>"
-      + '<p class="list-foot">' + (DEMO ? "Past calls and call recordings aren't part of this demo." : LIVE_MODE ? "From your Google Calendar: the next 14 days, events with a guest from outside your company, plus events with just you." : 'No calendar connected yet. <a href="#/home">Connect Google Calendar</a>') + "</p>";
+      + '<p class="list-foot">' + (DEMO ? "Past calls and call recordings aren't part of this demo." : LIVE_MODE ? "From your Google Calendar: the past 30 days and the next 14 days, events with a guest from outside your company, plus events with just you." : 'No calendar connected yet. <a href="#/home">Connect Google Calendar</a>') + "</p>";
     sec.onclick = (e) => {
       const v = e.target.closest("[data-cal-view]");
       if (v) { CAL.view = v.dataset.calView; renderCallsPage(); $('[data-cal-view="' + CAL.view + '"]', sec).focus(); return; }
@@ -2280,7 +2280,7 @@
         + row("note", "Call notes", "Stands in for call recordings (Gong)", "Made up")
         + "</div></section>"
         : '<section class="sec">' + secHead("Your data", "Overture records") + '<div class="list src-list">'
-        + row("calendar", plural(D.invites.length, "call"), "From your Google Calendar: the next 14 days, events with a guest from outside your company, plus events with just you", LIVE_MODE ? "Your calendar" : "Not connected", LIVE_MODE)
+        + row("calendar", plural(D.invites.length, "call"), "From your Google Calendar: the past 30 days and the next 14 days, events with a guest from outside your company, plus events with just you", LIVE_MODE ? "Your calendar" : "Not connected", LIVE_MODE)
         + row("users", plural(Object.keys(D.people).length, "person", "people"), "Guests on those calls. Add titles and notes from any brief.", "Overture records", LIVE_MODE)
         + row("building", plural(recCount, "company", "companies"), "Status and notes you set on a company page, plus accepted after-call updates", "Overture records", LIVE_MODE)
         + row("bell", plural(D.watch.length, "alert"), "Job changes and first meetings, worked out from your past meetings", LIVE_MODE ? "Your calendar" : "Not connected", LIVE_MODE)

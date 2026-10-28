@@ -931,20 +931,22 @@ def same_org(d1, d2, records):
     return d1 == d2 or company_for_domain(d1, records) == company_for_domain(d2, records)
 
 
-RECENT_HOURS = 48  # a call stays on the list this long after it ends, marked ended, so After the call still works
+RECENT_HOURS = 48  # a call that ended this recently still counts for invitee research and alerts
+PAST_DAYS = 30     # ended calls stay on the Calls calendar this long, so you can open their notes (no new research for them)
 
 
 def upcoming_invites(events, me_email, records, now):
-    """The calls Overture preps: the next DAYS_AHEAD days, plus calls that ended in the last RECENT_HOURS (ended: true), with
-    ids made unique."""
+    """The calls Overture preps: the next DAYS_AHEAD days, plus calls that ended in the last PAST_DAYS (ended: true; older: ended
+    over RECENT_HOURS ago, so only shown), with ids made unique."""
     invites = []
     for ev in events:
         start, end = _event_times(ev)
-        if not start or end <= now - timedelta(hours=RECENT_HOURS) or start > now + timedelta(days=DAYS_AHEAD):
+        if not start or end <= now - timedelta(days=PAST_DAYS) or start > now + timedelta(days=DAYS_AHEAD):
             continue
         inv = event_to_invite(ev, me_email, records)
         if inv:
             inv["ended"] = end <= now
+            inv["older"] = end <= now - timedelta(hours=RECENT_HOURS)  # on the calendar for its notes only
             invites.append(inv)
     invites.sort(key=lambda i: (bool(i.get("ended")), i["start"]))  # upcoming first, then the ones that just ended
     seen_ids = set()
@@ -987,7 +989,7 @@ def build_live(events, me, records, now=None, meta_out=None, crm=None):
                     p["titleSrc"] = "Overture records"
             d = domain_of(a["email"])
             seen = by_name.get(norm_name(a["name"]))
-            if personish(a) and seen and d and d not in PERSONAL_DOMAINS and not same_org(seen["domain"], d, records) and a["email"] not in flagged:
+            if not inv.get("older") and personish(a) and seen and d and d not in PERSONAL_DOMAINS and not same_org(seen["domain"], d, records) and a["email"] not in flagged:
                 old = company_for_domain(seen["domain"], records) or seen["domain"]
                 new = company_for_domain(d, records) or d
                 if not p["previous"]:
@@ -1020,6 +1022,8 @@ def build_live(events, me, records, now=None, meta_out=None, crm=None):
     meta = {} if meta_out is None else meta_out
     alerted = set()
     for inv in invites:
+        if inv.get("older"):
+            continue  # a past call kept only for its notes: its guests aren't looked up again
         for a in inv["attendees"]:
             email, d = a["email"], domain_of(a["email"])
             if email in meta:

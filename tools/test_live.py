@@ -224,13 +224,16 @@ class Signals(unittest.TestCase):
         rec["callNotes"]["u1"] = {"text": "Pilot next month"}
         upcoming = ev("u1", "2026-10-21T18:00:00+00:00", 30, [SELF, att("a@acme.com", "Ann Lee")])
         later = ev("u2", "2026-11-20T18:00:00+00:00", 30, [SELF, att("b@acme.com")])  # beyond 14 days
-        gone = ev("u0", "2026-10-17T18:00:00+00:00", 30, [SELF, att("b@acme.com")])   # over more than 48 hours ago
+        gone = ev("u0", "2026-10-17T18:00:00+00:00", 30, [SELF, att("b@acme.com")])   # 3 days ago: on the calendar for its notes only
         just = ev("u3", "2026-10-19T18:00:00+00:00", 30, [SELF, att("c@acme.com")])   # ended yesterday: kept, so After the call works
-        live = S.build_live([gone, just, upcoming, later], ME, rec, NOW)
+        ancient = ev("u9", "2026-09-01T18:00:00+00:00", 30, [SELF, att("d@acme.com")])  # over 30 days ago: gone
+        meta = {}
+        live = S.build_live([ancient, gone, just, upcoming, later], ME, rec, NOW, meta_out=meta)
         for k in ("today", "invites", "people", "companies", "papers", "currentSecurityPack", "relationships", "watch"):
             self.assertIn(k, live)
         self.assertEqual(live["today"], "2026-10-20")
-        self.assertEqual([(i["id"], i["ended"]) for i in live["invites"]], [("u1", False), ("u3", True)])  # upcoming first
+        self.assertEqual([(i["id"], i["ended"], i["older"]) for i in live["invites"]], [("u1", False, False), ("u0", True, True), ("u3", True, False)])  # upcoming first
+        self.assertEqual(sorted(meta), ["a@acme.com", "c@acme.com"])  # a call kept only for its notes never queues research
         live["invites"] = [i for i in live["invites"] if i["id"] == "u1"]
         self.assertEqual(live["invites"][0]["afterNotes"], "Pilot next month")
         p = live["people"]["a@acme.com"]
