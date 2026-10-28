@@ -9,14 +9,19 @@
   const LA = window.OvertureLiveAssist;
   const CFG = window.CENTRALIZE_CONFIG || {};
   const qs = new URLSearchParams(location.search);
-  const EXTENSION_ID = "geemcgoloailklihnpghgindneohhccc";
-  const EXTENSION_ORIGIN = "chrome-extension://" + EXTENSION_ID;
+  const EXTENSION_IDS = new Set(["geemcgoloailklihnpghgindneohhccc", "hpgckfchfdkkhajfgdpmhlcgnkbdeabo"]);
+  const EXTENSION_ORIGINS = new Set([...EXTENSION_IDS].map((id) => "chrome-extension://" + id));
+  const BRIDGE_EXTENSION_ORIGIN = EXTENSION_IDS.has(qs.get("bridge")) ? "chrome-extension://" + qs.get("bridge") : "";
+  const tabParameter = qs.get("tab");
+  const expectedMeetTabId = /^\d+$/.test(tabParameter || "") && Number.isSafeInteger(Number(tabParameter)) ? Number(tabParameter) : null;
+  const validMeetingBinding = /^[a-z]{3}-[a-z]{4}-[a-z]{3}$/i.test(qs.get("meet") || "") && expectedMeetTabId !== null;
+  let parentExtensionOrigin = "";
   // The connected tab uses a content script on our exact first-party origin. Its normal
   // HttpOnly session stays here; no cookie, API key, or bearer token enters the extension.
-  const HOSTED_BRIDGE = window.parent === window && qs.get("host") === "ext" && qs.get("bridge") === EXTENSION_ID;
+  const HOSTED_BRIDGE = window.parent === window && qs.get("host") === "ext" && !!BRIDGE_EXTENSION_ORIGIN && validMeetingBinding;
   function extensionMessage(data) {
     if (HOSTED_BRIDGE) window.postMessage(data, location.origin);
-    else if (window.parent !== window) window.parent.postMessage(data, EXTENSION_ORIGIN);
+    else if (window.parent !== window && parentExtensionOrigin) window.parent.postMessage(data, parentExtensionOrigin);
   }
   // Meet first: Zoom's SDK assumes any iframe is the Zoom web client and would just wait inside Meet.
   // host=ext: Overture's Chrome extension side panel, which passes the tab's Meet code (meet=) or Zoom meeting number (zoom=).
@@ -466,13 +471,19 @@
   let cc = captionState(state.callId, state.streamEpoch, false);
   const ccText = (stream) => { stream = stream || cc; return stream.lines.slice(stream.segStart).join("\n"); };
   window.addEventListener("message", (e) => {
-    const fromFrame = window.parent !== window && e.source === window.parent && e.origin === EXTENSION_ORIGIN;
-    const fromBridge = HOSTED_BRIDGE && e.source === window && e.origin === location.origin && e.data && e.data.extensionOrigin === EXTENSION_ORIGIN;
+    const fromFrame = window.parent !== window && e.source === window.parent && EXTENSION_ORIGINS.has(e.origin);
+    const fromBridge = HOSTED_BRIDGE && e.source === window && e.origin === location.origin && e.data && e.data.extensionOrigin === BRIDGE_EXTENSION_ORIGIN;
     if (HOST !== "ext" || (!fromFrame && !fromBridge) || !e.data) return;
     if (e.data.type === "overture-extension-ready") {
+      if (!validMeetingBinding || e.data.meetTabId !== expectedMeetTabId) return;
+      if (fromFrame) {
+        if (e.data.extensionOrigin !== e.origin || (parentExtensionOrigin && parentExtensionOrigin !== e.origin)) return;
+        parentExtensionOrigin = e.origin;
+      }
       extensionMessage({ type: "overture-panel-ready", live: LIVE_MODE, connected: LIVE_MODE, callId: state.callId || null, captionsReady: captionsOn() });
       return;
     }
+    if (fromFrame && parentExtensionOrigin !== e.origin) return;
     if (!LIVE_MODE) return;
     if (e.data.type === "overture-captions" && Array.isArray(e.data.lines)) captionLines(e.data.lines, e.data.events);
     if (e.data.type === "overture-call-ended") captionsDone("left", e.data.lines, e.data.events);

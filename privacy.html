@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="How Overture's Chrome extension and connected meeting panel process captions, account information and saved notes.">
+  <title>Privacy Policy · Overture</title>
+  <style>
+    :root{color-scheme:light}*{box-sizing:border-box}body{margin:0;background:#f6f7f5;color:#18241d;font:16px/1.65 system-ui,-apple-system,Segoe UI,sans-serif}main{max-width:780px;margin:40px auto;padding:36px;background:#fff;border:1px solid #dce4de;border-radius:16px}h1{font-size:30px;line-height:1.2;margin:0 0 12px}h2{font-size:20px;line-height:1.4;margin:30px 0 8px}p,ul{margin:0 0 16px}li{margin:6px 0}a{color:#116a3d;text-underline-offset:3px}.meta{color:#516359;font-size:14px}.brand{font-weight:700;font-size:14px;letter-spacing:.08em;margin-bottom:18px}@media(max-width:600px){main{margin:0;padding:26px 20px;border:0;border-radius:0}h1{font-size:27px}}
+  </style>
+</head>
+<body><main>
+  <p class="brand">OVERTURE</p>
+  <h1>Privacy policy</h1>
+  <p class="meta">Effective October 27, 2026 · Operator: Overture<br>Contact: <a href="mailto:goofturtles@gmail.com">goofturtles@gmail.com</a></p>
+  <p>This policy describes the Overture Chrome extension and its connected meeting panel at <a href="https://overture-nd0q.onrender.com">overture-nd0q.onrender.com</a>. Overture uses Google Meet captions to provide meeting assistance, research mentioned professionals and companies, and save notes to your account.</p>
+
+  <h2>Captions and meeting information</h2>
+  <p>When the extension is enabled on Google Meet, it reads visible closed-caption text, speaker labels, timestamps, caption availability and meeting state. Google Meet's captions must be turned on. The extension does not capture microphone audio, camera video or screen recordings.</p>
+  <p>It reads the current Meet meeting URL/code and the connected Overture panel URL to associate captions with the correct browser tab and call. It does not request access to the browser's history database or all websites. A bounded caption-recovery buffer is held in the Meet tab's memory, and the Overture tab can store a return-to-panel URL in session storage.</p>
+  <p>When a connected panel is open and a calendar call is matched or selected, captions are transmitted to Overture's server for processing. When the call ends, the panel may submit its buffered captions again to complete processing. The service saves selected statements, actions, questions, quote evidence, speaker attribution, person/company references and notes. Its note records are not an audio recording or a complete verbatim transcript. Captions and notes can contain personal, financial, confidential or other sensitive information supplied by participants.</p>
+
+  <h2>Accounts, calendar access and credentials</h2>
+  <p>Google provides sign-in. With your authorization, Overture reads your primary Google Calendar, including event titles, descriptions, dates, meeting links and attendees, to identify calls and provide their context. It processes your Google account name and email address to keep each account's records separate.</p>
+  <p>The hosted service stores the Google OAuth credentials needed to maintain this connection and uses an HttpOnly session cookie. Your Google password is entered on Google's sign-in page. The extension does not extract or export your password, OAuth token, API key or cookie value. Normal browser requests authenticate with Overture. If you enter an Anthropic API key in Overture's website settings, the server stores and uses it for enabled AI features.</p>
+
+  <h2>Research and optional AI analysis</h2>
+  <p>Overture uses captions to extract selected notes and identify mentioned people and companies. These operations can run on Overture's server without sending full captions to an AI provider.</p>
+  <p>When web research is enabled and an AI provider is configured, Overture sends limited professional identifiers such as a person's name, role, company and company domain to Anthropic for public-source research. Anthropic's search and page-fetch tools may contact external search services and public websites to find supporting information.</p>
+  <p>When the transcript-in-AI setting is enabled, caption batches and related call evidence may also be sent to Anthropic for analysis. Other AI features follow the website's configured data-sharing settings. Sending captions to Overture and sending them onward for AI analysis are separate processing steps. Possible identity matches and AI interpretations should be reviewed rather than treated as verified statements.</p>
+
+  <h2>Service providers and technical information</h2>
+  <ul>
+    <li><strong>Google</strong> provides sign-in and authorized Calendar access. Google Meet generates the captions that the extension reads.</li>
+    <li><strong>Render</strong> hosts the Overture service and its database, which process and store account records and saved notes.</li>
+    <li><strong>Anthropic</strong> receives requests for enabled AI analysis and professional research, including the public-search and page-fetch operations described above.</li>
+    <li><strong>Public website resources</strong>, including Google Fonts and GitHub resources used by the Overture website, may receive ordinary request metadata when loaded.</li>
+  </ul>
+  <p>The server and hosting infrastructure process connection and HTTP-request metadata. The application logs request paths, response status and the request peer's IP address; behind a hosting proxy, that address may identify the proxy. Hosting infrastructure may maintain additional access or operational logs. The application removes URL query strings from its request-log messages. It has no GPS or precise-location tracking feature and no general keystroke or mouse-position logging feature.</p>
+  <p>Information is used to provide the meeting, research, account and saved-note features and to operate and protect the service. The extension and connected panel do not provide advertising, data-sale, credit-scoring or lending features. The providers listed above process information to deliver the described features.</p>
+
+  <h2>Storage and retention</h2>
+  <p>Hosted records are stored by account on Overture's server and mirrored to its database. The website can also cache projected notes in browser storage under an account-specific key. The extension's caption-recovery buffer lasts within the browser context; selected notes and quote evidence saved to the service remain after the meeting or browser tab closes.</p>
+  <p>The current application does not automatically expire saved meeting records on a fixed schedule. Uninstalling the extension or disconnecting Google does not delete saved notes, records or every browser cache. Hosting logs and provider-managed copies follow the relevant provider's retention configuration; the application does not automatically purge them when you uninstall.</p>
+
+  <h2>Controls and deletion requests</h2>
+  <p>To stop caption capture, turn off Meet captions, disable the extension or close the Meet tab. Closing the connected Overture panel stops that panel from receiving and submitting captions, but an enabled reader can continue buffering visible captions locally in the Meet tab. Research and transcript-in-AI settings control the corresponding server features.</p>
+  <p>The website's Google disconnect action attempts to revoke the Google token, removes Overture's stored Google token, clears its calendar cache and ends the account's Overture sessions. It does not delete saved meeting records or a separately stored Anthropic key. Use the API-key removal control to remove that key. You can also manage Overture's authorization through your Google account.</p>
+  <p>For access, correction or deletion requests concerning saved Overture records, email <a href="mailto:goofturtles@gmail.com">goofturtles@gmail.com</a> from the account associated with your records. Deletion requests require operator handling; the application does not currently provide an automatic delete-account action. Identify the account and records concerned without including passwords, tokens or unnecessary sensitive meeting content.</p>
+
+  <h2>Security and meeting participants</h2>
+  <p>Overture uses HTTPS, origin checks for extension messages, account-separated records and HttpOnly session cookies. These measures do not guarantee absolute security. Tell meeting participants when captions are being used for notes or AI assistance, obtain permissions required for your meeting, and avoid processing information you are not authorized to share.</p>
+
+  <h2>Questions and changes</h2>
+  <p>Contact <a href="mailto:goofturtles@gmail.com">goofturtles@gmail.com</a> with questions about this policy. If data practices change, this page should be updated and material changes disclosed before the new processing begins.</p>
+  <p><a href="https://overture-nd0q.onrender.com">Return to Overture</a></p>
+</main></body>
+</html>

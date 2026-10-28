@@ -6988,6 +6988,7 @@ def start_sources_loop():
 
 EXTENSION_DIR = HERE / "extension"
 EXT_ID_RE = re.compile(r"^[a-p]{32}$")
+DEFAULT_EXTENSION_IDS = ("geemcgoloailklihnpghgindneohhccc", "hpgckfchfdkkhajfgdpmhlcgnkbdeabo")
 _EXT_CACHE = {}
 
 
@@ -6998,8 +6999,8 @@ def extension_id_from_key(key_b64):
 
 
 def extension_ids():
-    """Overture's Chrome extension (fixed by the "key" in extension/manifest.json), plus any ids in OVERTURE_EXTENSION_IDS."""
-    out = []
+    """Approved development/Store ids, the bundled manifest key, and validated operator-configured ids."""
+    out = list(DEFAULT_EXTENSION_IDS)
     try:
         path = EXTENSION_DIR / "manifest.json"
         mt = path.stat().st_mtime_ns
