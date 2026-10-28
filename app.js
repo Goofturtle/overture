@@ -244,7 +244,7 @@
   }
   function noCallsCard() {
     return '<section class="widget span-2 empty-calls" aria-labelledby="noCallsH"><h2 id="noCallsH">No calls in the next 14 days</h2>'
-      + "<p>Overture preps events on your Google Calendar that have at least one guest from outside your company. New invites show up here within a minute.</p>"
+      + "<p>Overture preps events on your Google Calendar that have a guest from outside your company, plus events with just you. New invites show up here within a minute.</p>"
       + '<a class="btn secondary" href="https://calendar.google.com" target="_blank" rel="noopener">Open Google Calendar' + NEW_TAB + "</a></section>";
   }
 
@@ -606,7 +606,7 @@
       + '<div class="cal-body"><div class="cal-gutter" aria-hidden="true">' + gutter + "</div>"
       + '<div class="cal-days" style="height:' + (end - start) * H + 'px"><div class="cal-lines" aria-hidden="true">' + lines + "</div>" + cols + "</div></div></div>"
       + '<div class="agenda">' + agenda + "</div>"
-      + '<p class="list-foot">' + (DEMO ? "Past calls and call recordings aren't part of this demo." : LIVE_MODE ? "From your Google Calendar: the next 14 days, events with at least one guest from outside your company." : 'No calendar connected yet. <a href="#/home">Connect Google Calendar</a>') + "</p>";
+      + '<p class="list-foot">' + (DEMO ? "Past calls and call recordings aren't part of this demo." : LIVE_MODE ? "From your Google Calendar: the next 14 days, events with a guest from outside your company, plus events with just you." : 'No calendar connected yet. <a href="#/home">Connect Google Calendar</a>') + "</p>";
     sec.onclick = (e) => {
       const v = e.target.closest("[data-cal-view]");
       if (v) { CAL.view = v.dataset.calView; renderCallsPage(); $('[data-cal-view="' + CAL.view + '"]', sec).focus(); return; }
@@ -2280,7 +2280,7 @@
         + row("note", "Call notes", "Stands in for call recordings (Gong)", "Made up")
         + "</div></section>"
         : '<section class="sec">' + secHead("Your data", "Overture records") + '<div class="list src-list">'
-        + row("calendar", plural(D.invites.length, "call"), "From your Google Calendar: the next 14 days, events with at least one guest from outside your company", LIVE_MODE ? "Your calendar" : "Not connected", LIVE_MODE)
+        + row("calendar", plural(D.invites.length, "call"), "From your Google Calendar: the next 14 days, events with a guest from outside your company, plus events with just you", LIVE_MODE ? "Your calendar" : "Not connected", LIVE_MODE)
         + row("users", plural(Object.keys(D.people).length, "person", "people"), "Guests on those calls. Add titles and notes from any brief.", "Overture records", LIVE_MODE)
         + row("building", plural(recCount, "company", "companies"), "Status and notes you set on a company page, plus accepted after-call updates", "Overture records", LIVE_MODE)
         + row("bell", plural(D.watch.length, "alert"), "Job changes and first meetings, worked out from your past meetings", LIVE_MODE ? "Your calendar" : "Not connected", LIVE_MODE)

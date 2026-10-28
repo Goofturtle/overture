@@ -113,10 +113,14 @@ class InviteMapping(unittest.TestCase):
         allday = {"id": "d", "summary": "Offsite", "start": {"date": "2026-10-21"}, "end": {"date": "2026-10-22"}, "attendees": [SELF, att("a@acme.com")]}
         cancelled = ev("c", "2026-10-21T14:00:00+00:00", 30, [SELF, att("a@acme.com")], status="cancelled")
         declined = ev("n", "2026-10-21T14:00:00+00:00", 30, [att("chris@spotify.com", self=True, responseStatus="declined"), att("a@acme.com")])
-        alone = ev("s", "2026-10-21T14:00:00+00:00", 30, [SELF])
-        no_guests = ev("g", "2026-10-21T14:00:00+00:00", 30, [])
-        for e in (allday, cancelled, declined, alone, no_guests):
+        for e in (allday, cancelled, declined):
             self.assertIsNone(S.event_to_invite(e, ME["email"], rec), e["id"])
+
+    def test_events_with_just_you_show(self):
+        rec = S.empty_records()
+        for e in (ev("s", "2026-10-21T14:00:00+00:00", 30, [SELF], summary="Test Meeting"), ev("g", "2026-10-21T14:00:00+00:00", 30, [], summary="Test Meeting")):
+            inv = S.event_to_invite(e, ME["email"], rec)
+            self.assertEqual((inv["title"], inv["attendees"], inv["domain"]), ("Test Meeting", [], ""), e["id"])
 
     def test_safe_ids_and_unique(self):
         e1 = ev("a b<c>", "2026-10-21T14:00:00+00:00", 30, [SELF, att("a@acme.com")])

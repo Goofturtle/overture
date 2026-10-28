@@ -881,11 +881,9 @@ def event_to_invite(ev, me_email, records):
     start, end = _event_times(ev)
     if not start:
         return None
-    people = _others(ev, me_email)
-    if not people:
-        return None
+    people = _others(ev, me_email)  # none: an event with just you (a test call, or guests not invited yet) still shows
     mine = domain_of(me_email)
-    if mine and mine not in PERSONAL_DOMAINS and all(domain_of(p["email"]) == mine for p in people):
+    if people and mine and mine not in PERSONAL_DOMAINS and all(domain_of(p["email"]) == mine for p in people):
         return None  # internal meeting: only your own colleagues
     counts = {}
     for p in people:
