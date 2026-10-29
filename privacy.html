@@ -12,7 +12,7 @@
 <body><main>
   <p class="brand">OVERTURE</p>
   <h1>Privacy policy</h1>
-  <p class="meta">Effective October 27, 2026 · Operator: Overture<br>Contact: <a href="mailto:goofturtles@gmail.com">goofturtles@gmail.com</a></p>
+  <p class="meta">Effective October 29, 2026 · Operator: Overture<br>Contact: <a href="mailto:goofturtles@gmail.com">goofturtles@gmail.com</a></p>
   <p>This policy describes the Overture Chrome extension and its connected meeting panel at <a href="https://overture-nd0q.onrender.com">overture-nd0q.onrender.com</a>. Overture uses Google Meet captions to provide meeting assistance, research mentioned professionals and companies, and save notes to your account.</p>
 
   <h2>Captions and meeting information</h2>
@@ -24,11 +24,13 @@
   <p>Google provides sign-in. With your authorization, Overture reads your primary Google Calendar, including event titles, descriptions, dates, meeting links and attendees, to identify calls and provide their context. It processes your Google account name and email address to keep each account's records separate.</p>
   <p>The hosted service stores the Google OAuth credentials needed to maintain this connection and uses an HttpOnly session cookie. Your Google password is entered on Google's sign-in page. The extension does not extract or export your password, OAuth token, API key or cookie value. Normal browser requests authenticate with Overture. If you enter an Anthropic API key in Overture's website settings, the server stores and uses it for enabled AI features.</p>
 
-  <h2>Research and optional AI analysis</h2>
-  <p>Overture uses captions to extract selected notes and identify mentioned people and companies. These operations can run on Overture's server without sending full captions to an AI provider.</p>
+  <h2>Research and AI analysis</h2>
+  <p>Overture uses captions to extract selected notes and identify mentioned people and companies. When automatic look-up is on (the default, in Settings, Mentions) and an Anthropic API key is set, new caption lines from the matched call are sent in small batches to Anthropic's Claude to pick out key points, people, companies and possibly mis-heard words, and to write a one-line note on what each one is and why it matters. Turn off automatic look-up to stop sending captions to Anthropic; notes found by Overture's own rules continue without it.</p>
   <p>When web research is enabled and an AI provider is configured, Overture sends limited professional identifiers such as a person's name, role, company and company domain to Anthropic for public-source research. Anthropic's search and page-fetch tools may contact external search services and public websites to find supporting information.</p>
-  <p>When the transcript-in-AI setting is enabled, caption batches and related call evidence may also be sent to Anthropic for analysis. Other AI features follow the website's configured data-sharing settings. Sending captions to Overture and sending them onward for AI analysis are separate processing steps. Possible identity matches and AI interpretations should be reviewed rather than treated as verified statements.</p>
+  <p>When the transcript-in-AI setting is enabled, caption batches and related call evidence may also be sent to Anthropic for analysis even with automatic look-up off. Other AI features follow the website's configured data-sharing settings. Sending captions to Overture and sending them onward for AI analysis are separate processing steps. Possible identity matches and AI interpretations should be reviewed rather than treated as verified statements.</p>
 
+  <h2>Limited Use</h2>
+  <p>The use of information received from Google APIs and of data collected by the Overture extension adheres to the <a href="https://developer.chrome.com/docs/webstore/program-policies/limited-use">Chrome Web Store User Data Policy, including the Limited Use requirements</a>, and to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>. Overture uses this data only to provide the meeting assistance, research and note features described here. It does not sell it, use it for advertising, or use it to determine creditworthiness or for lending. People do not read your captions or notes unless you ask for help and agree, it is needed for security or abuse investigation, it is required by law, or the data is aggregated and anonymized for internal operations.</p>
   <h2>Service providers and technical information</h2>
   <ul>
     <li><strong>Google</strong> provides sign-in and authorized Calendar access. Google Meet generates the captions that the extension reads.</li>
