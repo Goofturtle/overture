@@ -282,6 +282,7 @@
     }
     const j = await r.json();
     if (!j || j.callId !== callId || !j.assist || !Array.isArray(j.assist.notes)) throw new Error("Overture returned notes for a different call or an invalid response.");
+    state.notesElsewhere = Array.isArray(j.notesElsewhere) ? j.notesElsewhere.filter((x) => x && inviteById(x.callId)) : [];
     if (j.accountEmail && String(j.accountEmail).trim().toLowerCase() !== accountEmail) {
       const error = new Error("Your signed-in account changed. Reload to view its saved notes.");
       error.accountChanged = true;

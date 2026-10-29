@@ -11,3 +11,6 @@
 .saved-call-notes .la-uncertain-title { margin: 24px 0 6px; font-size: 14px; }
 .saved-call-notes .la-uncertain-notes { border-left: 2px solid #d69535; padding-left: 12px; }
 .saved-call-notes .la-possible-profile { color: var(--muted); }
+
+.notes-elsewhere { margin: 0 0 16px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; line-height: 1.55; }
+.notes-elsewhere a { color: var(--accent, #1ed760); font-weight: 600; }

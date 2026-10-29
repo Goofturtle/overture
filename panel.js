@@ -41,9 +41,10 @@
     // A meeting link that isn't on the event (pasted in chat, a new room): the one call on your calendar happening now,
     // from 15 minutes before it starts until 3 hours after its end (calls run over).
     const now = Date.now(), live = D.invites.filter((i) => Date.parse(i.start) - 15 * 60000 <= now && now <= Date.parse(i.end || i.start) + 3 * 3600000);
-    if (live.length !== 1) return null;
-    state.matchedByTime = true;
-    return live[0];
+    const started = live.filter((i) => Date.parse(i.start) <= now).sort((a, b) => Date.parse(b.start) - Date.parse(a.start));
+    const pick = live.length === 1 ? live[0] : started[0] || null;
+    if (pick) state.matchedByTime = true;
+    return pick;
   }
   document.documentElement.dataset.host = HOST;
   document.documentElement.dataset.framed = String(FRAMED);
@@ -563,7 +564,8 @@
   // Past the call's end time and no captions for 2 minutes: treat it as over (in case leaving the call wasn't seen).
   setInterval(() => {
     const inv = state.callId && window.C.inviteById(state.callId);
-    if (inv && inv.end && cc.lines.length && !cc.posted && Date.now() > Date.parse(inv.end) && Date.now() - cc.lastAt > 120000) captionsDone("time");
+    // ...and the Meet tab's reader has stopped checking in: a quiet stretch in a call that runs over isn't the end.
+    if (inv && inv.end && cc.lines.length && !cc.posted && Date.now() > Date.parse(inv.end) && Date.now() - cc.lastAt > 120000 && Date.now() - (cc.seenAt || 0) > 60000) captionsDone("time");
   }, 30000);
   function captionsLine() {
     if (!LIVE_MODE) return "";
@@ -717,14 +719,16 @@
         Object.assign({}, live, { busy: false, next: null, fins: [], seg: newSeg(), sent: "" }));
       if (cc.lines.length && !cc.posted) sendLive(ccText(), true, false,
         Object.assign({}, cc, { busy: false, next: null, fins: [], seg: newSeg(), sent: "", utterances: new Map(cc.utterances) }));
+      // No call was taking captions yet: keep what the Meet tab already heard and replay it into the call you picked.
+      const firstPick = !state.captionsCall;
       state.streamEpoch++;
       state.callId = state.captionsCall = e.target.value; state.open = null; state.view = null;
-      cc = captionState(state.callId, state.streamEpoch, true);
+      cc = captionState(state.callId, state.streamEpoch, !firstPick);
       Object.assign(live, { seg: "", sent: "", next: null, fins: [], paused: "", draft: "", latest: "", busy: false, ownerCall: state.callId, epoch: state.streamEpoch });
       clearTimeout(assist.timer); Object.assign(assist, { callId: state.callId, data: null, error: "", timer: null });
       Object.assign(mn, { callId: state.callId, items: [], orgs: [] });
       state.startedAt = Date.now();
-      if (HOST === "ext") extensionMessage({ type: "overture-captions-reset" });
+      if (HOST === "ext" && !firstPick) extensionMessage({ type: "overture-captions-reset" });
       if (HOST === "ext") extensionMessage({ type: "overture-panel-ready", live: LIVE_MODE, connected: LIVE_MODE, callId: state.callId, captionsReady: captionsOn() });
       await prepare(); await loadMentions(); render(); announce("Showing " + window.C.inviteById(state.callId).company + ".");
       loadAssist();

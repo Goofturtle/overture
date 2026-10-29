@@ -1473,7 +1473,13 @@
     if (!isOnCall(id)) return;
     const target = $("#savedCallNotes"), status = $("#savedCallNotesStatus");
     if (!target || !status) return;
-    const html = LA ? LA.renderNotes(store.get("notes:" + id) || []) : '<p class="help">Automatic notes are unavailable. Reload the page to try again.</p>';
+    const mine = store.get("notes:" + id) || [], elsewhere = (C.state.notesElsewhere || []).filter((x) => x.callId !== id);
+    // A meeting's notes can land on another calendar call (a reused Meet link, a call that ran late): point to them.
+    const pointer = !mine.some((n) => n && n.assist) && elsewhere.length ? '<p class="notes-elsewhere">' + elsewhere.map((x) => {
+      const o = C.inviteById(x.callId);
+      return "Automatic notes from a recent call (" + plural(x.count, "note") + ') are on <a href="#/calls/' + esc(x.callId) + '/after">' + esc(o.company + " · " + splitWhen(o.when).day + " " + splitWhen(o.when).start) + "</a>.";
+    }).join(" ") + "</p>" : "";
+    const html = pointer + (LA ? LA.renderNotes(mine) : '<p class="help">Automatic notes are unavailable. Reload the page to try again.</p>');
     if (target.innerHTML !== html) target.innerHTML = html;
     status.textContent = savedNotesWatch.error || (savedNotesWatch.loading ? "Refreshing saved notes…" : DEMO ? "Sample call notes" : window.OVERTURE_STATUS && window.OVERTURE_STATUS.hosted ? "Saved automatically to your account." : "Saved automatically on this PC.");
     const manual = panelManualNotes(id), button = $("#importNotes");

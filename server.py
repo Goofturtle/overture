@@ -5538,6 +5538,20 @@ def _assist_views(call_id, records):
     return people, orgs
 
 
+def notes_elsewhere(call_id, records=None, hours=24):
+    """Other calls with automatic notes saved in the last day: After the call points to them when a meeting's notes went to
+    another calendar call (a reused Meet link, a call that ran into the next one)."""
+    records = records if records is not None else load_records()
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    out = []
+    for cid, note in (records.get("callNotes") or {}).items():
+        auto = (note or {}).get("autoNotes") if isinstance(note, dict) else None
+        if cid == call_id or not isinstance(auto, dict) or not auto.get("entries") or str(auto.get("updatedAt") or "") < cutoff:
+            continue
+        out.append({"callId": cid, "count": len(auto["entries"]), "updatedAt": str(auto.get("updatedAt") or "")})
+    return sorted(out, key=lambda x: x["updatedAt"], reverse=True)[:5]
+
+
 def live_ai_on(records):
     """The live call pass (new caption lines -> Claude: key points, terms, and the people and companies to look up) runs whenever
     automatic look-up is on (Settings > Mentions, on by default) or "Use transcripts in AI answers" is on. Turning automatic
@@ -7253,7 +7267,7 @@ class Handler(SimpleHTTPRequestHandler):
             if not CALLID_RE.match(cid):
                 return self.send_json(400, {"error": "bad callId"})
             return self.send_json(200, {"callId": cid, "accountEmail": str((token_info() or {}).get("email") or "").lower(),
-                                        "assist": mentions_body(cid)["assist"]})
+                                        "assist": mentions_body(cid)["assist"], "notesElsewhere": notes_elsewhere(cid)})
         if path == "/api/mentions":
             if not read_guard_ok(self.headers):
                 return self.send_json(403, {"error": "not allowed"})
