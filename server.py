@@ -7390,6 +7390,12 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_json(*write_brief(brief_facts(body, load_records())))
 
 
+class Server(ThreadingHTTPServer):
+    # Room for a burst of new connections: a page load asks for about 25 files at once, and Render's network opens a
+    # connection for each. The default (5) turned the rest away (502), which left the page blank until a refresh.
+    request_queue_size = 128
+
+
 def main(argv):
     global PORT
     if sys.stderr is None or sys.stdout is None:  # started with pythonw (no window): the log goes to .data/server.log
@@ -7407,11 +7413,11 @@ def main(argv):
             n = db_restore()
         except Exception as e:  # serving from an empty disk would overwrite the saved copy: stop, Render starts it again
             sys.exit(f"[db] {type(e).__name__}: could not read the saved files from Postgres, so Overture did not start")
-        server = ThreadingHTTPServer(("0.0.0.0", PORT), partial(Handler, directory=str(HERE)))
+        server = Server(("0.0.0.0", PORT), partial(Handler, directory=str(HERE)))
         print(f"Overture shared site {PUBLIC_URL} on port {PORT} ({n} saved files restored; Google sign-in "
               f"{'set up' if google_client() else 'NOT set up: add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET'})", flush=True)
         return server.serve_forever()  # Meetily and Granola read files on your own PC, so the shared site doesn't poll them
-    server = ThreadingHTTPServer(("127.0.0.1", PORT), partial(Handler, directory=str(HERE)))
+    server = Server(("127.0.0.1", PORT), partial(Handler, directory=str(HERE)))
     st = status_body()
     g = "connected" if st["google"]["connected"] else "set up, not connected" if st["google"]["configured"] else "not set up"
     crm = "; ".join(SERVICE_NAMES[s] + (" set up" if st[s]["configured"] else " not set up") for s in SERVICE_NAMES)

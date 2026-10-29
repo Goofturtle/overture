@@ -216,5 +216,19 @@
   <script src="map.js"></script>
   <script src="app.js"></script>
   <script src="settings-page.js"></script>
+  <script>
+    // A file that didn't arrive (a network hiccup) leaves the page blank. Try once more on its own; if it fails again soon
+    // after, say so instead of showing an empty page.
+    if (!window.OvertureApp) {
+      var last = 0;
+      try { last = +sessionStorage.getItem("overture:reloadedAt") || 0; } catch (e) {}
+      if (Date.now() - last > 20000) {
+        try { sessionStorage.setItem("overture:reloadedAt", String(Date.now())); } catch (e) {}
+        location.reload();
+      } else {
+        document.body.insertAdjacentHTML("beforeend", '<p role="alert" style="position:fixed;inset:auto 16px 16px;z-index:99;margin:0;padding:12px 16px;border-radius:12px;background:#1f1f1f;color:#fff;font:14px/1.5 system-ui,sans-serif">Overture didn't finish loading. <a href="" style="color:#1ed760">Try again</a></p>');
+      }
+    }
+  </script>
 </body>
 </html>
