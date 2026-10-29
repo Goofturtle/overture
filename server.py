@@ -15,7 +15,7 @@ Secrets and tokens stay in .data/ (git-ignored) and are never logged or sent to 
 """
 import base64
 from difflib import SequenceMatcher
-from live_assist import build_assist as _build_live_assist, extract_notes as _extract_live_notes, merge_notes as _merge_live_notes, clean_semantic as _clean_live_semantic, SEMANTIC_SYSTEM
+from live_assist import build_assist as _build_live_assist, extract_notes as _extract_live_notes, merge_notes as _merge_live_notes, clean_semantic as _clean_live_semantic, clean_entities as _clean_live_entities, SEMANTIC_SYSTEM
 import contextlib
 import contextvars
 import hashlib
@@ -5462,6 +5462,11 @@ def _said_view(said):
     return {k: clean_text(said.get(k), 200) for k in ("label", "team", "relationship", "said", "speaker", "time")}
 
 
+def _brief_view(it):
+    """The live AI pass's brief on a mention: what it is, why it matters on this call, and what the captions said for a misheard name."""
+    return {k: clean_text(it.get(k), n) for k, n in (("why", 240), ("about", 240), ("heardAs", 120)) if it.get(k)}
+
+
 def mention_view(call_id, it, met, conns=None, block=None):
     """One mention as the page sees it. met: name -> last time you met them (from your calendar), or None if unknown."""
     status, note = mention_status(call_id, it)
@@ -5472,7 +5477,8 @@ def mention_view(call_id, it, met, conns=None, block=None):
            "candidates": [_person_view(c) for c in it.get("candidates") or []][:3] if status == "pick" else [],
            "confirmed": bool(it.get("confirmed")), "added": bool(it.get("added")), "hubspot": str(it.get("hubspot") or ""),
            "autoFound": bool(it.get("autoFound")) and status == "found", "likely": status == "pick" and bool(it.get("candidates")),
-           "said": _said_view(it.get("said")), "removed": bool(it.get("removed")), "explain": explain_view("person", it, block or {})}
+           "said": _said_view(it.get("said")), "removed": bool(it.get("removed")), "explain": explain_view("person", it, block or {}),
+           **_brief_view(it)}
     if conns is not None:
         out["connected"] = connection_id(call_id, "person", it.get("key") or it["id"]) in conns
     if met is not None:
@@ -5518,7 +5524,7 @@ def org_view(call_id, it, conns=None, block=None):
                                              "confidence": rel.get("confidence") if rel.get("confidence") in ("high", "medium") else "",
                                              "speaker": clean_text(rel.get("speaker"), 80), "time": clean_text(rel.get("time"), 12),
                                              "explanation": _explanation_view(rel.get("explanation"), remap)},
-           "explain": explain_view("company", it, block or {})}
+           "explain": explain_view("company", it, block or {}), **_brief_view(it)}
     if conns is not None:
         out["connected"] = connection_id(call_id, "company", it.get("key") or it["id"]) in conns
     return out
@@ -5532,15 +5538,22 @@ def _assist_views(call_id, records):
     return people, orgs
 
 
+def live_ai_on(records):
+    """The live call pass (new caption lines -> Claude: key points, terms, and the people and companies to look up) runs whenever
+    automatic look-up is on (Settings > Mentions, on by default) or "Use transcripts in AI answers" is on. Turning automatic
+    look-up off stops it."""
+    return setting_on(records, "transcriptsInAI") or bool(mention_settings(records).get("autoLookup"))
+
+
 def live_assist_view(call_id, records=None):
     records = records if records is not None else load_records()
     auto = ((records.get("callNotes") or {}).get(call_id) or {}).get("autoNotes") or {}
     notes = auto.get("entries") or [] if isinstance(auto, dict) else []
     people, orgs = _assist_views(call_id, records)
-    assist = _build_live_assist(call_id, notes, people, orgs, now_iso(), setting_on(records, "transcriptsInAI"))
+    assist = _build_live_assist(call_id, notes, people, orgs, now_iso(), live_ai_on(records))
     assist["updatedAt"] = auto.get("updatedAt", "") if isinstance(auto, dict) else ""
     semantic = dict(auto.get("semantic") or {}) if isinstance(auto, dict) else {}
-    enabled = setting_on(records, "transcriptsInAI")
+    enabled = live_ai_on(records)
     status = semantic.get("status") or ("ready" if semantic.get("lastAt") else "off")
     if not enabled:
         status = "off"
@@ -5593,7 +5606,7 @@ def capture_auto_notes(call_id, lines, source, ctx=None):
                 fresh["captionRevised"] = True
         saved_for_merge = [n for n in saved if n.get("utteranceId") not in revised_ids]
         merged = _merge_live_notes(saved_for_merge, incoming)
-        if merged == saved and not block.get("items") and not block.get("orgs") and not setting_on(records, "transcriptsInAI"):
+        if merged == saved and not block.get("items") and not block.get("orgs") and not live_ai_on(records):
             return
         note = records.setdefault("callNotes", {}).setdefault(call_id, {"text": ""})
         history = list(old.get("revisions") or []) if isinstance(old, dict) else []
@@ -5613,10 +5626,11 @@ def capture_auto_notes(call_id, lines, source, ctx=None):
         if len(json.dumps(records)) > MAX_RECORDS_BYTES:
             raise Invalid("The records store is full; automatic notes could not be saved. Your existing notes were not changed.")
         save_json(records_path(), records)
-    queue_live_semantic(call_id, lines, source)
+    queue_live_semantic(call_id, lines, source, ctx)
 
 
 SEMANTIC_AUTOSTART = True
+SEMANTIC_MAX_PASSES = 400   # per call: hours of steady talk at one pass every few seconds
 SEMANTIC_STATE = PerUser(dict)
 SEMANTIC_LOCK = threading.Lock()
 SEMANTIC_CAPACITY = threading.Semaphore(2)
@@ -5634,14 +5648,16 @@ def _semantic_status(call_id, status, error="", last_at=""):
         save_json(records_path(), records)
 
 
-def queue_live_semantic(call_id, lines, source):
-    if not lines or not setting_on(load_records(), "transcriptsInAI"):
+def queue_live_semantic(call_id, lines, source, ctx=None):
+    if not lines or not live_ai_on(load_records()):
         return False
     if not claude_on():
         _semantic_status(call_id, "unavailable", "Add a Claude key to enable automatic AI analysis; extractive notes remain active")
         return False
     with SEMANTIC_LOCK:
-        state = SEMANTIC_STATE.setdefault(call_id, {"pending": {}, "running": False, "scheduled": False})
+        state = SEMANTIC_STATE.setdefault(call_id, {"pending": {}, "running": False, "scheduled": False, "recent": [], "passes": 0})
+        if ctx:
+            state["ctx"] = ctx
         for line in lines:
             words = str(line.get("text") or "")
             if not words.strip():
@@ -5654,10 +5670,46 @@ def queue_live_semantic(call_id, lines, source):
     if schedule:
         _semantic_status(call_id, "queued")
         if SEMANTIC_AUTOSTART:
-            timer = threading.Timer(2.0, contextvars.copy_context().run, args=(live_semantic_step, call_id))
+            timer = threading.Timer(4.0, contextvars.copy_context().run, args=(live_semantic_step, call_id))  # a few lines per pass
             timer.daemon = True
             timer.start()
     return schedule
+
+
+def _semantic_call(ctx):
+    """What the live pass may know about the call, to spell names it mishears: the account and the companies Overture knows, the
+    known people, and who to skip (the guests and you: their research is already on the call)."""
+    if not ctx:
+        return {}
+    inv = ctx.get("invite") or {}
+    guests = [a.get("name", "") for a in inv.get("attendees") or [] if isinstance(a, dict) and a.get("name")]
+    return {"title": clean_text(inv.get("title"), 160), "company": ctx.get("company", ""),
+            "companies": [c for c in [ctx.get("company", "")] + list(ctx.get("orgs") or {})[:150] if c],
+            "people": [k.get("name", "") for k in (ctx.get("known") or [])[:100] if isinstance(k, dict) and k.get("name")],
+            "skip": guests + sorted(ctx.get("me") or [])}
+
+
+def _save_ai_mentions(call_id, ctx, heard):
+    """People and companies the live pass heard: saved and looked up like the ones the rules find, with why they matter and, for
+    a misheard name, what the captions said. A first name with no company stays as said (there is nothing to look it up by)."""
+    people, orgs = [], []
+    for e in heard:
+        if e["kind"] == "person":
+            full = len(e["name"].split()) >= 2
+            people.append({"key": ("n:" + norm_name(e["name"])) if full else "p:" + e["name"].lower() + "|", "name": e["name"],
+                           "role": ("at " + e["company"]) if e["company"] else e["role"], "kind": "full" if full else "partial", "count": 1,
+                           "quote": dict(e["quote"]), "si": None, "said": None, "why": e["why"], "about": e["about"], "heardAs": e["heardAs"], "aiFound": True})
+        else:
+            hit = next((o for name, o in (ctx.get("orgs") or {}).items() if norm_org(name) == norm_org(e["name"])), {})
+            orgs.append({"key": "o:" + norm_org(e["name"]), "name": e["name"], "said": e["spoken"], "domain": hit.get("domain", ""),
+                         "kind": "company", "count": 1, "quote": dict(e["quote"]), "si": None, "relation": None,
+                         "why": e["why"], "about": e["about"], "heardAs": e["heardAs"], "aiFound": True})
+    try:
+        block, new, go, wait, new_o, unqueue = save_mentions(call_id, ctx, people, "captions", orgs, bump=False)
+    except Invalid:
+        return
+    _unqueue(unqueue)
+    _queue_found(call_id, block, new, go, wait)
 
 
 def live_semantic_step(call_id):
@@ -5666,7 +5718,7 @@ def live_semantic_step(call_id):
         if not state or state["running"]:
             return False
         state["scheduled"] = False
-        if not setting_on(load_records(), "transcriptsInAI") or not claude_on():
+        if not live_ai_on(load_records()) or not claude_on() or state.get("passes", 0) >= SEMANTIC_MAX_PASSES:
             state["pending"].clear()
             return False
         batch, size = [], 0
@@ -5679,14 +5731,17 @@ def live_semantic_step(call_id):
         if not batch:
             return False
         state["running"] = True
+        state["passes"] = state.get("passes", 0) + 1
+        call, earlier = _semantic_call(state.get("ctx")), list(state.get("recent") or [])
+        state["recent"] = (earlier + [(line.get("speaker") or "Speaker") + ": " + line["text"][:300] for line in batch])[-8:]
     try:
         _semantic_status(call_id, "running")
         with SEMANTIC_CAPACITY:
             # Check privacy again immediately before crossing the provider boundary.
-            if not setting_on(load_records(), "transcriptsInAI"):
+            if not live_ai_on(load_records()):
                 _semantic_status(call_id, "off")
                 return False
-            status, response = claude_text(SEMANTIC_SYSTEM, json.dumps({"utterances": batch}, ensure_ascii=False), 1800, 12, retries=0)
+            status, response = claude_text(SEMANTIC_SYSTEM, json.dumps({"call": call, "earlier": earlier, "utterances": batch}, ensure_ascii=False), 1800, 12, retries=0)
         if status != 200:
             _semantic_status(call_id, "unavailable", str(response.get("error") or "AI analysis did not answer"))
             return False
@@ -5696,9 +5751,12 @@ def live_semantic_step(call_id):
             return False
         cleaned = _clean_live_semantic(call_id, payload, batch, now_iso())
         by_id = {str(line["id"]): line for line in batch}
+        heard = _clean_live_entities(payload, batch, call)
+        if heard and state.get("ctx"):
+            _save_ai_mentions(call_id, state["ctx"], heard)
         with RECORDS_LOCK:
             records = load_records()
-            if not setting_on(records, "transcriptsInAI"):
+            if not live_ai_on(records):
                 return False
             note = records.setdefault("callNotes", {}).setdefault(call_id, {"text": ""})
             auto = note.setdefault("autoNotes", {"version": 1, "entries": []})
@@ -6023,7 +6081,8 @@ def save_mentions(call_id, ctx, found, source, orgs=None, bump=True, now=None, d
             it = {"id": hashlib.sha256((call_id + "|" + f["key"]).encode("utf-8")).hexdigest()[:12], "key": f["key"], "name": f["name"],
                   "role": f["role"], "kind": f["kind"], "count": f["count"], "quote": f["quote"], "source": source, "at": now_iso(),
                   "person": None, "candidates": [], "note": "", "confirmed": False, "added": False, "hubspot": "",
-                  "said": f.get("said") or None, "fromNode": _from_node(f["quote"].get("speaker"), ctx), "autoFound": False}
+                  "said": f.get("said") or None, "fromNode": _from_node(f["quote"].get("speaker"), ctx), "autoFound": False,
+                  **{k: f[k] for k in ("why", "about", "heardAs", "aiFound") if f.get(k)}}
             scope = person_mention_scope(block, it, r)
             if it.get("role", "").startswith("at "):
                 it.update(mentionedCompany=scope["company"], mentionedDomain=scope["domain"])
@@ -6061,7 +6120,8 @@ def save_mentions(call_id, ctx, found, source, orgs=None, bump=True, now=None, d
                 break
             it = {"id": hashlib.sha256((call_id + "|" + o["key"]).encode("utf-8")).hexdigest()[:12], "key": o["key"], "name": o["name"],
                   "domain": o.get("domain") or "", "kind": "company", "count": o["count"], "quote": o["quote"], "source": source, "at": now_iso(),
-                  "fromNode": _from_node(o["quote"].get("speaker"), ctx), "relation": None, "note": "", "removed": False, "waitUntil": 0}
+                  "fromNode": _from_node(o["quote"].get("speaker"), ctx), "relation": None, "note": "", "removed": False, "waitUntil": 0,
+                  **{k: o[k] for k in ("why", "about", "heardAs", "aiFound") if o.get(k)}}
             if rel:
                 it.update(status="said", relation=rel)  # the call explained it: no web lookup
             elif rel is False:

@@ -55,13 +55,19 @@
     const [label, tone] = status(item), heard = clean(item.heard, 600), detail = clean(item.detail, 1800);
     const links = (Array.isArray(item.sources) ? item.sources : []).slice(0, 3).map(sourceLink).filter(Boolean).join(" · ");
     return '<article class="la-card la-' + tone + '"><div class="la-card-head"><span class="la-kind">' + esc(clean(item.kind, 24) || "Insight") + '</span><span class="la-status">' + esc(label) + '</span></div><h3>'
-      + (item.kind === "person" && item.profileUrl ? profileLink(clean(item.title, 180), item.profileUrl, uncertain(item)) : esc(clean(item.title, 180) || "Mention heard")) + "</h3>" + (detail ? "<p>" + esc(detail) + "</p>" : "")
+      + (item.kind === "person" && item.profileUrl ? profileLink(clean(item.title, 180), item.profileUrl, uncertain(item)) : esc(clean(item.title, 180) || "Mention heard")) + "</h3>"
+      // The live pass's brief: what it is (from what the AI knows, not looked up), why it matters here, and a misheard spelling.
+      + (item.about ? '<p class="la-about">' + esc(clean(item.about, 240)) + ' <span class="la-ai">AI summary, not checked</span></p>' : "")
+      + (item.why ? '<p class="la-why"><strong>Why it matters:</strong> ' + esc(clean(item.why, 240)) + "</p>" : "")
+      + (item.heardAs ? '<p class="la-heard">Captions said “' + esc(clean(item.heardAs, 120)) + "”</p>" : "")
+      + (detail ? "<p>" + esc(detail) + "</p>" : "")
       + (heard ? '<p class="la-heard">Heard: “' + esc(heard) + '”</p>' : "")
       + '<div class="la-source">' + esc([item.time || "", item.speaker || "", sourceName(item.source)].filter(Boolean).join(" · ")) + (links ? " · " + links : "") + "</div></article>";
   }
   function renderFeed(assist, error, options) {
-    const a = normalize(assist), person = a.items.filter((x) => x.kind === "person").slice(-1)[0];
-    const recent = person ? [person].concat(a.items.filter((x) => x !== person).slice(-2).reverse()) : a.items.slice(-3).reverse();
+    // Newest first: the last four people and companies heard (each with its brief), then the latest other point.
+    const a = normalize(assist), named = a.items.filter((x) => x.kind === "person" || x.kind === "company").slice(-4).reverse();
+    const recent = named.concat(a.items.filter((x) => x.kind !== "person" && x.kind !== "company").slice(-(named.length ? 1 : 3)).reverse());
     if (error) return '<div class="la-error" role="status">' + esc(error) + " Captions remain in this panel; lookup results are not available yet.</div>";
     let mode = "";
     if (a.semantic) {

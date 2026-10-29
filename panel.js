@@ -36,9 +36,14 @@
     const meet = codeKey(qs.get("meet")), zoom = String(qs.get("zoom") || "").replace(/\D/g, "");
     // a recurring meeting reuses its code: take the occurrence closest to now (today's, even once it runs late)
     const nearest = (list) => list.sort((a, b) => Math.abs(Date.parse(a.start) - Date.now()) - Math.abs(Date.parse(b.start) - Date.now()))[0] || null;
-    if (meet) return nearest(D.invites.filter((i) => codeKey(i.meetingCode) === meet));
-    if (zoom) return nearest(D.invites.filter((i) => String(i.zoomId || "") === zoom));
-    return null;
+    const byCode = meet ? nearest(D.invites.filter((i) => codeKey(i.meetingCode) === meet)) : zoom ? nearest(D.invites.filter((i) => String(i.zoomId || "") === zoom)) : null;
+    if (byCode || (!meet && !zoom)) return byCode;
+    // A meeting link that isn't on the event (pasted in chat, a new room): the one call on your calendar happening now,
+    // from 15 minutes before it starts until 3 hours after its end (calls run over).
+    const now = Date.now(), live = D.invites.filter((i) => Date.parse(i.start) - 15 * 60000 <= now && now <= Date.parse(i.end || i.start) + 3 * 3600000);
+    if (live.length !== 1) return null;
+    state.matchedByTime = true;
+    return live[0];
   }
   document.documentElement.dataset.host = HOST;
   document.documentElement.dataset.framed = String(FRAMED);
@@ -57,7 +62,8 @@
   if (HOST === "ext") {
     const m = extMatch();
     if (m) state.callId = state.captionsCall = m.id; // captions are only read for a call this meeting matched, or one you pick
-    state.hostNote = m ? "Matched this " + HOST_NAME + " call to " + m.company + "."
+    state.hostNote = m ? (state.matchedByTime ? "This meeting's link isn't on your calendar, so Overture matched it to the call happening now: " + m.company + ". Wrong call? Pick it below."
+      : "Matched this " + HOST_NAME + " call to " + m.company + ".")
       : (qs.get("meet") || qs.get("zoom")) ? "Pick the call below. This meeting isn't on your calendar." : "Open a Google Meet or Zoom web call in this tab, or pick a call below.";
   }
   const announce = (t) => { const el = $("#announce"); el.textContent = ""; setTimeout(() => { el.textContent = t; }, 50); };
@@ -350,6 +356,10 @@
     if (!c) { c = document.createElement("span"); c.className = "p-count num"; tab.appendChild(c); }
     c.textContent = String(n);
   }
+  // The live AI pass's brief on someone or something heard: what it is (not looked up), why it matters here, a misheard spelling.
+  const mnBrief = (x) => (x.about ? '<p class="p-person-sub">' + esc(x.about) + " · AI summary, not checked</p>" : "")
+    + (x.why ? '<p class="p-person-sub">Why it matters: ' + esc(x.why) + "</p>" : "")
+    + (x.heardAs ? '<p class="p-person-sub">Captions said “' + esc(x.heardAs) + "”</p>" : "");
   function mnRow(it) {
     const p = it.person, c0 = it.status === "pick" && it.candidates && it.candidates[0];
     const t = it.autoFound && !it.confirmed && it.status === "found" ? ["Found automatically", "tag-green"] : MN_TAG[it.status] || MN_TAG.notfound;
@@ -363,7 +373,7 @@
     }
     return '<li class="p-mn" data-mn="' + esc(it.id) + '">' + avatar({ name }, "md") + '<div class="p-mn-text"><p class="p-person-name">' + esc(name)
       + '<span class="pill ' + t[1] + '">' + (it.status === "pending" ? ic("loader", "spin") : "") + esc(t[0]) + "</span></p>"
-      + (sub ? '<p class="p-person-sub">' + esc(sub) + "</p>" : "")
+      + (sub ? '<p class="p-person-sub">' + esc(sub) + "</p>" : "") + mnBrief(it)
       + (it.quote && it.quote.text ? '<p class="p-mn-quote">“' + esc(it.quote.text) + "”</p>" : "")
       + (it.explain && (["found", "known", "pick"].includes(it.status) || it.said) ? window.C.explainFold(it.explain, { noMention: true }) : "")
       + (acts.join("") ? '<p class="p-mn-acts">' + acts.join("") + "</p>" : "") + "</div></li>";
@@ -374,7 +384,7 @@
     const sub = r && r.type !== "unknown" ? cap(r.label) + (r.source === "said" && r.said && !quoted ? ": “" + r.said + "”" : "") : "";
     return '<li class="p-mn" data-mn="' + esc(o.id) + '">' + coTile(o.name, "co-tile p-mn-co") + '<div class="p-mn-text"><p class="p-person-name">' + esc(o.name)
       + '<span class="pill ' + t[1] + '">' + (o.status === "pending" || o.status === "waiting" ? ic("loader", "spin") : "") + esc(t[0]) + "</span></p>"
-      + (sub ? '<p class="p-person-sub">' + esc(sub) + "</p>" : "")
+      + (sub ? '<p class="p-person-sub">' + esc(sub) + "</p>" : "") + mnBrief(o)
       + (o.quote && o.quote.text ? '<p class="p-mn-quote">“' + esc(o.quote.text) + "”</p>" : "")
       + (o.explain && r && r.type !== "unknown" ? window.C.explainFold(o.explain, { noMention: true }) : "")
       + (LIVE_MODE && mnConnBtn(o) ? '<p class="p-mn-acts">' + mnConnBtn(o) + "</p>" : "") + "</div></li>";
