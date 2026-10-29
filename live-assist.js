@@ -66,7 +66,8 @@
   }
   function renderFeed(assist, error, options) {
     // Newest first: the last four people and companies heard (each with its brief), then the latest other point.
-    const a = normalize(assist), named = a.items.filter((x) => x.kind === "person" || x.kind === "company").slice(-4).reverse();
+    const a = normalize(assist), when = (x) => Date.parse(x.at) || 0;
+    const named = a.items.filter((x) => x.kind === "person" || x.kind === "company").sort((x, y) => when(y) - when(x)).slice(0, 4);
     const recent = named.concat(a.items.filter((x) => x.kind !== "person" && x.kind !== "company").slice(-(named.length ? 1 : 3)).reverse());
     if (error) return '<div class="la-error" role="status">' + esc(error) + " Captions remain in this panel; lookup results are not available yet.</div>";
     let mode = "";

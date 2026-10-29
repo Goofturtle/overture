@@ -5464,7 +5464,10 @@ def _said_view(said):
 
 def _brief_view(it):
     """The live AI pass's brief on a mention: what it is, why it matters on this call, and what the captions said for a misheard name."""
-    return {k: clean_text(it.get(k), n) for k, n in (("why", 240), ("about", 240), ("heardAs", 120)) if it.get(k)}
+    out = {k: clean_text(it.get(k), n) for k, n in (("why", 240), ("about", 240), ("heardAs", 120)) if it.get(k)}
+    if it.get("at"):
+        out["at"] = str(it["at"])
+    return out
 
 
 def mention_view(call_id, it, met, conns=None, block=None):
@@ -5663,7 +5666,8 @@ def _semantic_status(call_id, status, error="", last_at=""):
 
 
 def queue_live_semantic(call_id, lines, source, ctx=None):
-    if not lines or not live_ai_on(load_records()):
+    records = load_records()
+    if not lines or not (live_ai_on(records) if source in ("captions", "live") else setting_on(records, "transcriptsInAI")):
         return False
     if not claude_on():
         _semantic_status(call_id, "unavailable", "Add a Claude key to enable automatic AI analysis; extractive notes remain active")
@@ -5703,23 +5707,56 @@ def _semantic_call(ctx):
             "skip": guests + sorted(ctx.get("me") or [])}
 
 
-def _save_ai_mentions(call_id, ctx, heard):
+def _codename_near(name, text):
+    """True when the name is a codename, or sits right after "Project"/"codename" or right before "project"/"initiative"."""
+    if not name or CODENAME_RE.search(name):
+        return True
+    low, at = text.lower(), text.lower().find(name.lower())
+    return at >= 0 and (bool(CODE_BEFORE_RE.search(text[:at])) or bool(CODE_AFTER_RE.match(text[at + len(name):])))
+
+
+def _save_ai_mentions(call_id, ctx, heard, source="captions"):
     """People and companies the live pass heard: saved and looked up like the ones the rules find, with why they matter and, for
-    a misheard name, what the captions said. A first name with no company stays as said (there is nothing to look it up by)."""
+    a misheard name, what the captions said. They pass the rules' own checks first. A first name alone is looked up only when
+    Overture knows exactly one person by it; otherwise it stays as said."""
     people, orgs = [], []
+    known_full = {norm_name(k.get("name", "")): k for k in ctx.get("known") or [] if isinstance(k, dict) and k.get("name")}
+    known_first = {}
+    for k in known_full.values():
+        known_first.setdefault(norm_name(k["name"]).split()[0], []).append(k)
+    own = norm_org(ctx.get("company") or "")
     for e in heard:
+        text = e["quote"]["text"]
+        if _codename_near(e["name"], text) or _codename_near(e["spoken"], text):
+            continue
+        brief = {"why": e["why"], "about": e["about"], "heardAs": e["heardAs"], "aiFound": True}
         if e["kind"] == "person":
-            full = len(e["name"].split()) >= 2
-            people.append({"key": ("n:" + norm_name(e["name"])) if full else "p:" + e["name"].lower() + "|", "name": e["name"],
-                           "role": ("at " + e["company"]) if e["company"] else e["role"], "kind": "full" if full else "partial", "count": 1,
-                           "quote": dict(e["quote"]), "si": None, "said": None, "why": e["why"], "about": e["about"], "heardAs": e["heardAs"], "aiFound": True})
+            nn = norm_name(e["name"])
+            words = nn.split()
+            if not words or nn in ctx.get("attendees", set()) or nn in ctx.get("me", set()) or (len(words) == 1 and (words[0] in ctx.get("attendeeFirst", set()) or words[0] in ctx.get("meFirst", set()))):
+                continue
+            company = e["company"] if e["company"] and norm_org(e["company"]) != own and "spotify" not in norm_org(e["company"]) and not _codename_near(e["company"], e["company"]) else ""
+            role = e["role"] if e["role"] and ROLE_OR_TEAM_RE.fullmatch(e["role"]) and e["role"].lower() in text.lower() and not CODENAME_RE.search(e["role"]) else ""
+            known = known_full.get(nn) or (known_first[words[0]][0] if len(words) == 1 and len(known_first.get(words[0], [])) == 1 else None)
+            if known:
+                people.append({"key": "n:" + norm_name(known["name"]), "name": known["name"], "role": "", "kind": "known", "known": known, "count": 1,
+                               "quote": dict(e["quote"]), "si": None, "said": None, **brief})
+            elif len(words) >= 2:
+                people.append({"key": "n:" + nn, "name": e["name"], "role": ("at " + company) if company else role, "kind": "full", "count": 1,
+                               "quote": dict(e["quote"]), "si": None, "said": None, **brief})
+            else:
+                people.append({"key": "p:" + words[0] + "|" + (role.lower() if not company else ""), "name": e["name"], "role": ("at " + company) if company else role,
+                               "kind": "partial", "count": 1, "quote": dict(e["quote"]), "si": None, "said": None, "noLookup": not company and not role, **brief})
         else:
+            if not _org_ok(e["name"], ctx, set(known_full)):
+                continue
             hit = next((o for name, o in (ctx.get("orgs") or {}).items() if norm_org(name) == norm_org(e["name"])), {})
             orgs.append({"key": "o:" + norm_org(e["name"]), "name": e["name"], "said": e["spoken"], "domain": hit.get("domain", ""),
-                         "kind": "company", "count": 1, "quote": dict(e["quote"]), "si": None, "relation": None,
-                         "why": e["why"], "about": e["about"], "heardAs": e["heardAs"], "aiFound": True})
+                         "kind": "company", "count": 1, "quote": dict(e["quote"]), "si": None, "relation": None, **brief})
+    if not people and not orgs:
+        return
     try:
-        block, new, go, wait, new_o, unqueue = save_mentions(call_id, ctx, people, "captions", orgs, bump=False)
+        block, new, go, wait, new_o, unqueue = save_mentions(call_id, ctx, people, source, orgs, bump=False)
     except Invalid:
         return
     _unqueue(unqueue)
@@ -5744,18 +5781,19 @@ def live_semantic_step(call_id):
             del state["pending"][uid]
         if not batch:
             return False
-        state["running"] = True
-        state["passes"] = state.get("passes", 0) + 1
-        call, earlier = _semantic_call(state.get("ctx")), list(state.get("recent") or [])
+        earlier = list(state.get("recent") or [])
         state["recent"] = (earlier + [(line.get("speaker") or "Speaker") + ": " + line["text"][:300] for line in batch])[-8:]
+        state["passes"] = state.get("passes", 0) + 1
+        state["running"] = True
     try:
+        call = _semantic_call(state.get("ctx"))
         _semantic_status(call_id, "running")
         with SEMANTIC_CAPACITY:
             # Check privacy again immediately before crossing the provider boundary.
             if not live_ai_on(load_records()):
                 _semantic_status(call_id, "off")
                 return False
-            status, response = claude_text(SEMANTIC_SYSTEM, json.dumps({"call": call, "earlier": earlier, "utterances": batch}, ensure_ascii=False), 1800, 12, retries=0)
+            status, response = claude_text(SEMANTIC_SYSTEM, json.dumps({"call": call, "earlier": earlier, "utterances": batch}, ensure_ascii=False), 3000, 15, retries=0)
         if status != 200:
             _semantic_status(call_id, "unavailable", str(response.get("error") or "AI analysis did not answer"))
             return False
@@ -5767,7 +5805,12 @@ def live_semantic_step(call_id):
         by_id = {str(line["id"]): line for line in batch}
         heard = _clean_live_entities(payload, batch, call)
         if heard and state.get("ctx"):
-            _save_ai_mentions(call_id, state["ctx"], heard)
+            # A caption Meet revised since this pass read it: what the pass heard in the old words is dropped.
+            auto = ((load_records().get("callNotes") or {}).get(call_id) or {}).get("autoNotes") or {}
+            versions = auto.get("utteranceVersions") or {} if isinstance(auto, dict) else {}
+            heard = [e for e in heard if versions.get(e["utteranceId"]) == hashlib.sha256(by_id[e["utteranceId"]]["text"].encode()).hexdigest()]
+            if heard:
+                _save_ai_mentions(call_id, state["ctx"], heard, by_id[heard[0]["utteranceId"]].get("source") or "captions")
         with RECORDS_LOCK:
             records = load_records()
             if not live_ai_on(records):
@@ -6085,6 +6128,7 @@ def save_mentions(call_id, ctx, found, source, orgs=None, bump=True, now=None, d
         for f in found:
             old = have.get(f["key"])
             if old:
+                old.update({k: f[k] for k in ("why", "about", "heardAs") if f.get(k) and not old.get(k)})
                 if bump:
                     old["count"] = int(old.get("count") or 1) + f["count"]
                 if f.get("said") and not old.get("said"):
@@ -6103,6 +6147,8 @@ def save_mentions(call_id, ctx, found, source, orgs=None, bump=True, now=None, d
             person_blocker = scope["error"] or lookup_blocker({"company": scope["company"], "domain": scope["domain"]}, auto, r, allow_name_only=scope["nameOnly"])
             if f["kind"] == "known":
                 it.update(status="known", person=dict(f["known"]))
+            elif f.get("noLookup"):
+                it.update(status="nokey", note="Only a first name was heard, so Overture didn't look it up.")
             elif f.get("candidates"):
                 it.update(status="pick", candidates=[dict(c) for c in f["candidates"]],
                           note="People Overture already knows at " + (ctx["company"] or "this company") + " by that " + ("name" if f["name"] else "title") + ".")
@@ -6117,6 +6163,9 @@ def save_mentions(call_id, ctx, found, source, orgs=None, bump=True, now=None, d
         for o in orgs or []:
             rel, old = o.get("relation"), have_o.get(o["key"])
             if old:
+                old.update({k: o[k] for k in ("why", "about", "heardAs") if o.get(k) and not old.get(k)})
+                if o.get("aiFound"):
+                    continue  # the AI pass adds its brief; the rules' wait for an explanation stays as it is
                 if bump:
                     old["count"] = int(old.get("count") or 1) + o["count"]
                 if rel and old.get("status") in ("waiting", "pending"):  # explained on the call: that wins over the web

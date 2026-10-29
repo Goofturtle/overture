@@ -64,6 +64,8 @@ class Fresh(unittest.TestCase):
         S.LOOKUP_CACHE.clear()
         with S.LIVE_LOCK:
             S.LIVE_SEGMENTS.clear()
+        S.SEMANTIC_AUTOSTART = False  # no live AI pass fires from a timer in the middle of a later test
+        S.SEMANTIC_STATE.clear()
 
 
 class TimeTests(unittest.TestCase):

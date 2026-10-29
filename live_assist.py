@@ -241,7 +241,9 @@ def build_assist(call_id, saved_notes, people, companies, at, semantic_enabled=F
                           "status": "possible" if note.get("uncertain") else "exact", "inferred": False, "sources": [],
                           "at": note.get("at") or at, "source": note.get("source") or "captions", "speaker": note.get("speaker", ""), "time": note.get("time", ""), "reportedOnCall": True,
                           "sourceVerified": False, "evidenceType": note.get("evidenceType", "caption")})
-    return {"version": 1, "items": items[-MAX_ITEMS:], "notes": notes,
+    named = [i for i in items if i["kind"] in ("person", "company")][-MAX_ITEMS:]
+    rest = [i for i in items if i["kind"] not in ("person", "company")][-max(0, MAX_ITEMS - len(named)):] if len(named) < MAX_ITEMS else []
+    return {"version": 1, "items": named + rest, "notes": notes,
             "pending": any(i["status"] == "pending" for i in items),
             "semantic": {"enabled": bool(semantic_enabled), "mode": "extractive",
                          "note": "Call notes are extracted from the exact captions; they are not independent fact verification. Semantic transcript sharing is enabled." if semantic_enabled else "Extractive notes are on. Transcript sharing with AI is off; full-call semantic analysis is not being sent to a model."}}
@@ -259,6 +261,13 @@ Term meanings inferred from context are suggestions, not verified external facts
 If nothing is important, return {"items":[],"entities":[]}. Keep at most 20 items and 8 entities, each concise."""
 
 NAME_OK = re.compile(r"^[^\W\d_][\w.'’&+ -]{0,79}$")
+
+def _sentence_with(text, words):
+    """The sentence of a caption that contains the words (the whole caption, cut to 300 characters, if none does)."""
+    for match in SENTENCE.finditer(str(text or "")):
+        if clean(words).casefold() in match.group(0).casefold():
+            return clean(match.group(0), 300)
+    return clean(text, 300)
 
 def clean_entities(payload, utterances, call=None):
     """People and companies the model heard. Each must quote words from its own utterance; a corrected spelling is kept only
@@ -289,7 +298,7 @@ def clean_entities(payload, utterances, call=None):
         if name.casefold() != spoken.casefold() and name.casefold() not in known and SequenceMatcher(None, name.casefold(), spoken.casefold()).ratio() < 0.5:
             name = spoken
         name = known.get(name.casefold(), name)
-        if not NAME_OK.match(name) or name.casefold() in skip or (value["kind"] == "person" and name.split()[0].casefold() in skip_first):
+        if not NAME_OK.match(name) or name.casefold() in skip or (value["kind"] == "person" and len(name.split()) == 1 and name.casefold() in skip_first):
             continue
         key = value["kind"] + "|" + name.casefold()
         if key in seen:
@@ -298,7 +307,7 @@ def clean_entities(payload, utterances, call=None):
         out.append({"kind": value["kind"], "name": name, "spoken": spoken, "heardAs": spoken if spoken.casefold() != name.casefold() else "",
                     "company": clean(value.get("company"), 120) if value["kind"] == "person" else "", "role": clean(value.get("role"), 80),
                     "why": clean(value.get("why"), 240), "about": clean(value.get("about"), 240), "importance": min(3, importance), "utteranceId": str(utterance["id"]),
-                    "quote": {"text": clean(utterance.get("text"), 1000), "speaker": clean(utterance.get("speaker"), 80), "time": clean(utterance.get("time"), 12)}})
+                    "quote": {"text": _sentence_with(utterance.get("text"), spoken), "speaker": clean(utterance.get("speaker"), 80), "time": clean(utterance.get("time"), 12)}})
     return out
 
 def clean_semantic(call_id, payload, utterances, at):

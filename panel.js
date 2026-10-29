@@ -39,8 +39,8 @@
     const byCode = meet ? nearest(D.invites.filter((i) => codeKey(i.meetingCode) === meet)) : zoom ? nearest(D.invites.filter((i) => String(i.zoomId || "") === zoom)) : null;
     if (byCode || (!meet && !zoom)) return byCode;
     // A meeting link that isn't on the event (pasted in chat, a new room): the one call on your calendar happening now,
-    // from 15 minutes before it starts until 3 hours after its end (calls run over).
-    const now = Date.now(), live = D.invites.filter((i) => Date.parse(i.start) - 15 * 60000 <= now && now <= Date.parse(i.end || i.start) + 3 * 3600000);
+    // from 15 minutes before it starts until 90 minutes after its end (calls run over).
+    const now = Date.now(), live = D.invites.filter((i) => Date.parse(i.start) - 15 * 60000 <= now && now <= Date.parse(i.end || i.start) + 90 * 60000);
     const started = live.filter((i) => Date.parse(i.start) <= now).sort((a, b) => Date.parse(b.start) - Date.parse(a.start));
     const pick = live.length === 1 ? live[0] : started[0] || null;
     if (pick) state.matchedByTime = true;
@@ -717,12 +717,12 @@
       // Send a private final snapshot to the OLD call before invalidating all old callbacks and buffers.
       if (live.seg && (live.draft.trim() || live.sent)) sendLive(live.draft.trim() ? live.draft : live.sent, true, false,
         Object.assign({}, live, { busy: false, next: null, fins: [], seg: newSeg(), sent: "" }));
-      if (cc.lines.length && !cc.posted) sendLive(ccText(), true, false,
+      if (cc.lines.length && !cc.posted && !state.matchedByTime) sendLive(ccText(), true, false,
         Object.assign({}, cc, { busy: false, next: null, fins: [], seg: newSeg(), sent: "", utterances: new Map(cc.utterances) }));
       // No call was taking captions yet: keep what the Meet tab already heard and replay it into the call you picked.
-      const firstPick = !state.captionsCall;
+      const firstPick = !state.captionsCall || !!state.matchedByTime;  // a time-only guess counts as no pick
       state.streamEpoch++;
-      state.callId = state.captionsCall = e.target.value; state.open = null; state.view = null;
+      state.callId = state.captionsCall = e.target.value; state.open = null; state.view = null; state.matchedByTime = false;
       cc = captionState(state.callId, state.streamEpoch, !firstPick);
       Object.assign(live, { seg: "", sent: "", next: null, fins: [], paused: "", draft: "", latest: "", busy: false, ownerCall: state.callId, epoch: state.streamEpoch });
       clearTimeout(assist.timer); Object.assign(assist, { callId: state.callId, data: null, error: "", timer: null });
