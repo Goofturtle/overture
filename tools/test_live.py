@@ -4447,6 +4447,141 @@ class ZoomIds(unittest.TestCase):
             self.assertEqual(S.event_to_invite(e, ME["email"], S.empty_records())["zoomId"], "", loc)
 
 
+class GuestNames(unittest.TestCase):
+    """Who shows as a person on a call, and by what name: the People map's cards and groups come from these."""
+
+    def test_names_made_from_the_address(self):
+        cases = {"ayaan.hussain4101@gmail.com": "Ayaan Hussain", "shlokparekh112@gmail.com": "Shlokparekh",
+                 "farhannigilharoon@gmail.com": "Farhannigilharoon",  # run together: no split is guessed
+                 "marcus.bell@northwind-freight.com": "Marcus Bell", "sam_lee-ray@acme.com": "Sam Lee Ray", "sam+work@gmail.com": "Sam",
+                 "0man71ismharan@gmail.com": "0man71ismharan@gmail.com", "12345@gmail.com": "12345@gmail.com"}  # not a name: the address shows
+        for email, want in cases.items():
+            self.assertEqual(S.name_from_email(email), want, email)
+
+    def test_the_calendar_name_first_then_the_organizer_then_the_address(self):
+        e = ev("n1", "2026-10-21T14:00:00+00:00", 30, [SELF, att("ayaan.hussain4101@gmail.com", "Ayaan Hussain"), att("shlokparekh112@gmail.com"),
+               att("farhan.n@gmail.com")], organizer={"email": "farhan.n@gmail.com", "displayName": "Farhan Nigil Haroon"})
+        names = [a["name"] for a in S.event_to_invite(e, ME["email"], S.empty_records())["attendees"]]
+        self.assertEqual(names, ["Ayaan Hussain", "Shlokparekh", "Farhan Nigil Haroon"])
+
+    def test_role_system_and_resource_mailboxes_are_not_people(self):
+        rec = S.empty_records()
+        e = ev("r1", "2026-10-21T14:00:00+00:00", 30, [SELF, att("admin@tks.world", "Admin"), att("noreply@acme.com"), att("No-Reply@zoom.us"),
+               att("calendar@acme.com"), att("room-2@resource.calendar.google.com", "Room 2"), att("priya.raman@acme.com", "Priya Raman")])
+        inv = S.event_to_invite(e, ME["email"], rec)
+        self.assertEqual([a["email"] for a in inv["attendees"]], ["priya.raman@acme.com"])
+        self.assertEqual(inv["company"], "Acme")  # a person's company beats a shared mailbox's
+        only_role = S.event_to_invite(ev("r2", "2026-10-21T14:00:00+00:00", 30, [SELF, att("sales@initech.com")]), ME["email"], rec)
+        self.assertEqual((only_role["attendees"], only_role["company"], only_role["noCompany"]), ([], "Initech", False))  # still says who it's with
+        system = S.event_to_invite(ev("r3", "2026-10-21T14:00:00+00:00", 30, [SELF, att("noreply@acme.com")], summary="Webinar"), ME["email"], rec)
+        self.assertEqual((system["attendees"], system["domain"], system["noCompany"]), ([], "", True))
+        live = S.build_live([ev("u1", "2026-10-21T18:00:00+00:00", 30, [SELF, att("admin@acme.com", "Admin"), att("dana@acme.com", "Dana Li")])], ME, rec, NOW)
+        self.assertEqual(sorted(live["people"]), ["dana@acme.com"])
+
+    def test_the_same_person_twice_on_a_call_is_one_person(self):
+        e = ev("d1", "2026-10-21T14:00:00+00:00", 30, [SELF, att("mharanjeyananthan@gmail.com"), att("mharanjeyananthan@uwaterloo.ca"),
+               att("Priya.Raman@acme.com", "Priya Raman"), att("priyaraman@gmail.com"), att("sam@acme.com", "Sam"), att("Sam@Acme.com"),
+               att("sam@globex.com", "Sam")])
+        inv = S.event_to_invite(e, ME["email"], S.empty_records())
+        self.assertEqual([(a["name"], a["email"]) for a in inv["attendees"]], [
+            ("Mharanjeyananthan", "mharanjeyananthan@uwaterloo.ca"),  # the work address is kept
+            ("Priya Raman", "priya.raman@acme.com"),                  # with the fuller name
+            ("Sam", "sam@acme.com"), ("Sam", "sam@globex.com")])     # two people both called Sam stay two people
+        self.assertEqual(inv["company"], "Acme")
+
+    def test_personal_email_guests_never_make_a_company(self):
+        rec = S.empty_records()
+        e = ev("t1", "2026-10-21T14:00:00+00:00", 30, [SELF, att("farhannigilharoon@gmail.com"), att("sam.lee@rogers.com"), att("li@hotmail.ca")],
+               summary="Meeting Test")
+        inv = S.event_to_invite(e, ME["email"], rec)
+        self.assertEqual((inv["company"], inv["domain"], inv["noCompany"]), ("Meeting Test", "", True))  # the title is only the call's label
+        work = ev("t2", "2026-10-21T15:00:00+00:00", 30, [SELF, att("sam@gmail.com", "Sam Lee"), att("priya.raman@northwind-freight.com", "Priya Raman")],
+                  summary="Tks")
+        inv = S.event_to_invite(work, ME["email"], rec)
+        self.assertEqual((inv["company"], inv["domain"], inv["noCompany"]), ("Northwind Freight", "northwind-freight.com", False))
+        same_webmail = ev("t3", "2026-10-21T16:00:00+00:00", 30, [att("me@hotmail.ca", self=True), att("pat@hotmail.ca", "Pat Roe")])
+        self.assertIsNotNone(S.event_to_invite(same_webmail, "me@hotmail.ca", rec))  # webmail isn't "your company": not an internal meeting
+        self.assertNotIn("Meeting Test", S.build_live([e], ME, rec, NOW)["companyDomains"])
+
+
+class HiddenCalls(Fresh):
+    """Remove a call from Overture: only Overture's own list changes, never the Google Calendar event."""
+
+    @staticmethod
+    def events():
+        return [ev("keep1", "2026-10-21T14:00:00+00:00", 30, [SELF, att("dana.li@quillstack.ai", "Dana Li")], summary="Intro: Quillstack"),
+                ev("gone1", "2026-10-22T14:00:00+00:00", 30, [SELF, att("sam.okafor@lumenair.com", "Sam Okafor")], summary="Demo: Lumenair")]
+
+    def test_validation(self):
+        for body in ({}, {"callId": "gone1"}, {"callId": "../x", "hidden": True}, {"callId": "gone1", "hidden": "yes"}, {"callId": "gone1", "hidden": 1},
+                     {"callId": "gone1", "hidden": True, "extra": 1}, ["gone1"], {"callId": 5, "hidden": True}, {"callId": "x" * 201, "hidden": True}):
+            with self.assertRaises(S.Invalid, msg=body):
+                S.write_records("hide-call", body)
+        self.assertFalse(S.records_path().exists())
+
+    def test_a_removed_call_leaves_invites_people_alerts_map_and_research(self):
+        S.write_records("hide-call", {"callId": "gone1", "hidden": True})
+        rec = S.load_records()
+        rec["connections"] = {cid: {"id": cid, "kind": "person", "callId": call, "name": "Ana Ruiz", "label": "mentioned", "from": "you"}
+                              for cid, call in (("c1", "gone1"), ("c2", "keep1"))}
+        rec["mentions"] = {"gone1": {"items": [{"id": "m1"}]}, "keep1": {"items": [{"id": "m2"}]}}
+        meta = {}
+        live = S.build_live(self.events(), ME, rec, NOW, meta_out=meta)
+        self.assertEqual([i["id"] for i in live["invites"]], ["keep1"])
+        self.assertEqual([(h["id"], h["company"], h["title"]) for h in live["hiddenCalls"]], [("gone1", "Lumenair", "Demo: Lumenair")])
+        self.assertEqual(sorted(live["people"]), ["dana.li@quillstack.ai"])
+        self.assertEqual(sorted(meta), ["dana.li@quillstack.ai"])  # nobody on a removed call is looked up
+        self.assertEqual({w["callId"] for w in live["watch"]}, {"keep1"})  # Alerts and Home
+        self.assertEqual({m["callId"] for m in live["mentioned"]} | {r["callId"] for r in live["relationships"]}, {"keep1"})  # the People map
+        self.assertEqual(set(live["mentions"]), {"keep1"})
+        S.write_records("hide-call", {"callId": "gone1", "hidden": False})  # Restore
+        live = S.build_live(self.events(), ME, S.load_records(), NOW)
+        self.assertEqual(([i["id"] for i in live["invites"]], live["hiddenCalls"]), (["keep1", "gone1"], []))
+
+    def test_removing_one_copy_never_renames_another(self):
+        copies = [ev("dup", "2026-10-21T14:00:00+00:00", 30, [SELF, att("a@acme.com")]), ev("dup", "2026-10-22T14:00:00+00:00", 30, [SELF, att("a@acme.com")])]
+        S.write_records("hide-call", {"callId": "dup", "hidden": True})
+        self.assertEqual([i["id"] for i in S.build_live(copies, ME, S.load_records(), NOW)["invites"]], ["dup-2"])
+
+    def test_the_list_is_capped_and_the_oldest_goes_first(self):
+        old = S.MAX_HIDDEN_CALLS
+        S.MAX_HIDDEN_CALLS = 3
+        try:
+            for i in range(5):
+                S.write_records("hide-call", {"callId": "c%d" % i, "hidden": True})
+            S.write_records("hide-call", {"callId": "c2", "hidden": True})  # removed again: now the newest
+            S.write_records("hide-call", {"callId": "c5", "hidden": True})
+            self.assertEqual(list(S.load_records()["hiddenCalls"]), ["c4", "c2", "c5"])
+        finally:
+            S.MAX_HIDDEN_CALLS = old
+
+
+class HideCallRoute(ServerBase):
+    def test_guards_validation_and_no_calendar_writes(self):
+        origin = "http://localhost:%d" % S.PORT
+        ok = {"X-OVERTURE": "1", "Origin": origin}
+        body = {"callId": "gone1", "hidden": True}
+        sent, old = [], S.HTTP
+        S.HTTP = lambda *a, **k: sent.append(a) or (500, {})
+        try:
+            self.assertEqual(self.req("POST", "/api/calls/hide", body)[0], 403)
+            self.assertEqual(self.req("POST", "/api/calls/hide", body, {"X-OVERTURE": "1"})[0], 403)  # no Origin or Referer
+            self.assertEqual(self.req("POST", "/api/calls/hide", body, {"X-OVERTURE": "1", "Origin": "https://evil.example"})[0], 403)
+            self.assertEqual(self.req("POST", "/api/calls/hide", body, dict(ok, **{"Content-Type": "text/plain"}))[0], 403)
+            self.assertEqual(self.req("POST", "/api/calls/hide", body, dict(ok, Host="evil.example"))[0], 403)
+            self.assertFalse(S.records_path().exists())
+            for bad in ({"callId": "../x", "hidden": True}, {"callId": "gone1", "hidden": "true"}, {"callId": "gone1"}, dict(body, x=1)):
+                self.assertEqual(self.req("POST", "/api/calls/hide", bad, ok)[0], 400, bad)
+            st, txt, _ = self.req("POST", "/api/calls/hide", body, ok)
+            self.assertEqual((st, json.loads(txt)["saved"]), (200, {"callId": "gone1", "hidden": True}), txt)
+            self.assertEqual(list(S.load_records()["hiddenCalls"]), ["gone1"])
+            self.assertEqual(self.req("POST", "/api/calls/hide", {"callId": "gone1", "hidden": False}, ok)[0], 200)
+            self.assertEqual(S.load_records()["hiddenCalls"], {})
+            self.assertEqual(sent, [])  # nothing was sent anywhere: the Google Calendar event is never changed
+        finally:
+            S.HTTP = old
+
+
 class SharedSite(ServerBase):
     """The shared site (Render): each Google account sees only its own data; a signed-out visitor sees the connect screen."""
     URL = "https://overture.example.com"
@@ -4606,6 +4741,15 @@ class SharedSite(ServerBase):
             self.assertFalse((Path(TMP).parent / "evil.json").exists())
         finally:
             S._db_run = old
+
+    def test_removed_calls_are_kept_per_account(self):
+        a, b = self.sign_in("chris@spotify.com"), self.sign_in("sam@example.org")
+        st, txt, _ = self.hreq("POST", "/api/calls/hide", {"callId": "e1", "hidden": True}, cookie=a, write=True)
+        self.assertEqual(st, 200, txt)
+        self.assertEqual(list(json.loads(self.hreq("GET", "/api/records", cookie=a)[1])["hiddenCalls"]), ["e1"])
+        self.assertEqual(json.loads(self.hreq("GET", "/api/records", cookie=b)[1])["hiddenCalls"], {})
+        self.assertEqual(self.hreq("POST", "/api/calls/hide", {"callId": "e1", "hidden": True}, write=True)[0], 401)  # signed out
+        self.assertEqual(self.hreq("POST", "/api/calls/hide", {"callId": "e1", "hidden": True}, cookie=b)[0], 403)  # not from Overture's page
 
 
 if __name__ == "__main__":

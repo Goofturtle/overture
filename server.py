@@ -698,9 +698,14 @@ def domain_of(email):
 
 
 def name_from_email(email):
-    local = str(email).split("@")[0]
-    parts = [p for p in re.split(r"[._\-+]+", local) if p and not p.isdigit()]
-    return " ".join(p.capitalize() for p in parts) or str(email)
+    """A readable name from the address when the calendar has none: 'ayaan.hussain4101@gmail.com' -> 'Ayaan Hussain',
+    'shlokparekh112@gmail.com' -> 'Shlokparekh'. Trailing digits and a +tag go; . _ - split the words. A run-together name stays
+    one word (no split is guessed), and a username that still has digits in it isn't a name, so the address itself shows."""
+    local = str(email).split("@")[0].split("+")[0]
+    parts = [p for p in (re.sub(r"\d+$", "", w) for w in re.split(r"[._\-]+", local)) if p]
+    if not parts or any(re.search(r"[\d\W_]", p) for p in parts):
+        return str(email)
+    return " ".join(p.capitalize() for p in parts)
 
 
 RESERVED_TLDS = {"example", "test", "invalid", "localhost"}
@@ -836,6 +841,47 @@ def norm_name(n):
 
 ROLE_BOXES = {"info", "sales", "hello", "team", "support", "contact", "admin", "noreply", "no-reply", "office", "hr",
               "billing", "marketing", "partners"}
+# System mailboxes are never people and never say who a call is with (shared ones like sales@ still name the company).
+SYSTEM_BOXES = {"noreply", "no-reply", "no_reply", "donotreply", "do-not-reply", "do_not_reply", "calendar", "calendar-notification",
+                "notification", "notifications", "mailer-daemon", "postmaster", "bounce", "bounces"}
+
+
+def mailbox(email):
+    """An address's own part, without a +tag or trailing digits: 'No-Reply+x@acme.com' -> 'no-reply', 'admin2@acme.com' -> 'admin'."""
+    return re.sub(r"\d+$", "", str(email or "").split("@")[0].split("+")[0].strip().lower())
+
+
+def system_box(email):
+    return mailbox(email) in SYSTEM_BOXES
+
+
+def role_box(email):
+    """A shared or system mailbox (admin@, info@, noreply@): shown on no page as a person."""
+    return mailbox(email) in ROLE_BOXES or system_box(email)
+
+
+def name_key(name):
+    """A name as letters only, to spot one person twice: 'Priya Raman' and 'Priyaraman' -> 'priyaraman'."""
+    return re.sub(r"[\W\d_]+", "", str(name).lower())
+
+
+def merge_guests(people):
+    """One entry per person on a call: the same address twice, or the same name on two addresses (work and personal email).
+    A name only merges when it is a full name or a long run-together one, so two guests both called 'Sam' stay two people.
+    The work address is kept (it names the company), with the fuller of the two names."""
+    out = []
+    for p in people:
+        k = name_key(p["name"])
+        same = next((q for q in out if q["email"] == p["email"] or (k and k == name_key(q["name"])
+                     and (" " in norm_name(p["name"]) or " " in norm_name(q["name"]) or len(k) >= 8))), None)
+        if not same:
+            out.append(dict(p))
+            continue
+        if personal_domain(domain_of(same["email"])) and not personal_domain(domain_of(p["email"])):
+            same["email"] = p["email"]
+        if len(norm_name(p["name"]).split()) > len(norm_name(same["name"]).split()):
+            same["name"] = p["name"]
+    return out
 
 
 def personish(p):
@@ -854,14 +900,18 @@ def _event_times(ev):
 
 
 def _others(ev, me_email):
-    """Attendees who are not the user and not a room."""
+    """Attendees who are not the user, not a room or resource calendar and not a system mailbox (noreply@, calendar@)."""
     out = []
+    hosts = {str(h.get("email", "")).strip().lower(): str(h.get("displayName") or "").strip()
+             for h in (ev.get("creator"), ev.get("organizer")) if isinstance(h, dict) and str(h.get("displayName") or "").strip()}
     for a in ev.get("attendees") or []:
         email = str(a.get("email", "")).strip().lower()
-        if not email or a.get("self") or email == me_email or a.get("resource") or email.endswith("calendar.google.com"):
+        if not email or a.get("self") or email == me_email or a.get("resource") or email.endswith("calendar.google.com") or system_box(email):
             continue
-        # No name on the invite: the full name written in the event itself ("Call with Shea Kim") beats the email's first word.
-        named = str(a.get("displayName") or "").strip() or name_from_event(email, {"title": ev.get("summary"), "notes": plain_text(ev.get("description"))})
+        # No name on the invite: the calendar's own name for them when they set up the event, then the full name written in the
+        # event itself ("Call with Shea Kim"), then one made from the address.
+        named = (str(a.get("displayName") or "").strip() or hosts.get(email)
+                 or name_from_event(email, {"title": ev.get("summary"), "notes": plain_text(ev.get("description"))}))
         out.append({"name": named or name_from_email(email), "email": email})
     return out
 
@@ -881,22 +931,28 @@ def event_to_invite(ev, me_email, records):
     start, end = _event_times(ev)
     if not start:
         return None
-    people = _others(ev, me_email)  # none: an event with just you (a test call, or guests not invited yet) still shows
+    guests = _others(ev, me_email)  # none: an event with just you (a test call, or guests not invited yet) still shows
+    people = merge_guests([g for g in guests if not role_box(g["email"])])  # shared mailboxes (admin@, info@) aren't people
     mine = domain_of(me_email)
-    if people and mine and mine not in PERSONAL_DOMAINS and all(domain_of(p["email"]) == mine for p in people):
+    if guests and mine and not personal_domain(mine) and all(domain_of(p["email"]) == mine for p in guests):
         return None  # internal meeting: only your own colleagues
     counts = {}
-    for p in people:
-        d = domain_of(p["email"])
-        if d and d not in PERSONAL_DOMAINS and d != mine:
-            counts[d] = counts.get(d, 0) + 1
+    for group in (people, [g for g in guests if role_box(g["email"])]):  # a shared mailbox (sales@) names the company only when no person does
+        for p in group:
+            d = domain_of(p["email"])
+            if d and not personal_domain(d) and d != mine:
+                counts[d] = counts.get(d, 0) + 1
+        if counts:
+            break
     title = " ".join(str(ev.get("summary") or "").split())[:200] or "Untitled call"
     domain = max(counts, key=lambda d: (counts[d], -list(counts).index(d))) if counts else ""
+    # No guest from a company (personal email like gmail.com, or nobody but you): the title is only the call's label, never a
+    # company, and the People map groups those guests as "Personal email" (noCompany).
     company = (company_for_domain(domain, records) if domain else None) or title[:80]
     s_et, e_et = to_et(start), to_et(end)
     cid = safe_id(ev.get("id"))
     return {
-        "id": cid, "title": title, "company": company, "domain": domain,
+        "id": cid, "title": title, "company": company, "domain": domain, "noCompany": not domain,
         "when": when_string(start, end), "start": s_et.isoformat(), "end": e_et.isoformat(),
         "attendees": people, "notes": plain_text(ev.get("description")), "meetingCode": meeting_code(ev), "zoomId": zoom_id(ev),
         "versionFile": "", "backstageSince": None,
@@ -935,9 +991,16 @@ RECENT_HOURS = 48  # a call that ended this recently still counts for invitee re
 PAST_DAYS = 30     # ended calls stay on the Calls calendar this long, so you can open their notes (no new research for them)
 
 
-def upcoming_invites(events, me_email, records, now):
+def hidden_calls(records):
+    """Calls you removed from Overture (Remove on a call): call id -> when. Google Calendar itself is never changed."""
+    h = records.get("hiddenCalls")
+    return h if isinstance(h, dict) else {}
+
+
+def upcoming_invites(events, me_email, records, now, removed=None):
     """The calls Overture preps: the next DAYS_AHEAD days, plus calls that ended in the last PAST_DAYS (ended: true; older: ended
-    over RECENT_HOURS ago, so only shown), with ids made unique."""
+    over RECENT_HOURS ago, so only shown), with ids made unique. Calls you removed are left out; removed (a list), when given,
+    gets a short line for each, for the Removed calls list on the Data page."""
     invites = []
     for ev in events:
         start, end = _event_times(ev)
@@ -955,7 +1018,10 @@ def upcoming_invites(events, me_email, records, now):
         while inv["id"] in seen_ids:
             inv["id"], n = base + "-" + str(n), n + 1
         seen_ids.add(inv["id"])
-    return invites
+    hidden = hidden_calls(records)  # after the ids are made unique, so removing one call never renames another
+    if removed is not None:
+        removed.extend({k: inv[k] for k in ("id", "title", "company", "when", "start", "ended")} for inv in invites if inv["id"] in hidden)
+    return [inv for inv in invites if inv["id"] not in hidden]
 
 
 def build_live(events, me, records, now=None, meta_out=None, crm=None):
@@ -966,7 +1032,8 @@ def build_live(events, me, records, now=None, meta_out=None, crm=None):
     me = me or {}
     me_email = str(me.get("email", "")).lower()
     today_et = to_et(now).date()
-    invites = upcoming_invites(events, me_email, records, now)
+    removed = []  # calls you removed from Overture: left out of every page, listed on the Data page to put back
+    invites = upcoming_invites(events, me_email, records, now, removed)
     crm = crm or {}
     hs_cos, hs_people = crm.get("companies") or {}, crm.get("contacts") or {}
 
@@ -1105,7 +1172,7 @@ def build_live(events, me, records, now=None, meta_out=None, crm=None):
 
     live = {
         "today": today_et.isoformat(), "me": {"email": me_email, "name": str(me.get("name", ""))},
-        "invites": invites, "people": people, "companies": companies, "companyDomains": company_domains,
+        "invites": invites, "hiddenCalls": removed, "people": people, "companies": companies, "companyDomains": company_domains,
         "papers": {}, "currentSecurityPack": "", "relationships": [], "mentioned": [], "watch": watch,
         "settings": {"gongInAI": gong_in_ai(records), "gongTranscripts": setting_on(records, "gongTranscripts"),
                      "transcriptsInAI": setting_on(records, "transcriptsInAI")},
@@ -1114,6 +1181,7 @@ def build_live(events, me, records, now=None, meta_out=None, crm=None):
                      if isinstance(m, dict) and (m.get("items") or m.get("orgs")) and cid in {i["id"] for i in invites}},
     }
     # People and companies mentioned on these calls, as map nodes and labelled edges (see "connections" further down)
+    records = place_mentions(records, invites, me)
     live["mentioned"], live["relationships"] = connections_graph(records, {i["id"] for i in invites}, set(people))
     if crm.get("gong"):
         live["gong"] = crm["gong"]
@@ -1200,7 +1268,7 @@ YM_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 def empty_records():
     return {"version": 1, "companies": {}, "people": {}, "callNotes": {}, "updates": {}, "settings": {}, "hubspotSaved": {},
-            "mentions": {}, "knownPeople": {}, "connections": {}, "connectionsRemoved": {}, "granola": {}, "orgs": {}}
+            "mentions": {}, "knownPeople": {}, "connections": {}, "connectionsRemoved": {}, "granola": {}, "orgs": {}, "hiddenCalls": {}}
 
 
 def load_records():
@@ -1209,7 +1277,7 @@ def load_records():
         return empty_records()
     base = empty_records()
     for k in ("companies", "people", "callNotes", "updates", "settings", "hubspotSaved", "mentions", "knownPeople", "connections", "connectionsRemoved", "granola",
-              "orgs"):
+              "orgs", "hiddenCalls"):
         if isinstance(r.get(k), dict):
             base[k] = r[k]
     return base
@@ -1326,6 +1394,20 @@ def clean_apply(body):
     return {"callId": cid, "company": company, "accept": lists["accept"], "undo": lists["undo"]}
 
 
+MAX_HIDDEN_CALLS = 500  # removed calls kept per account; the oldest is dropped first
+
+
+def clean_hide_call(body):
+    """POST /api/calls/hide: {callId, hidden: true} takes a call off Overture's pages, hidden: false puts it back."""
+    _only(body, {"callId", "hidden"})
+    cid = _str(body, "callId", 200, True)
+    if not CALLID_RE.match(cid):
+        raise Invalid("callId doesn't look right")
+    if not isinstance(body.get("hidden"), bool):
+        raise Invalid("hidden must be true or false")
+    return {"callId": cid, "hidden": body["hidden"]}
+
+
 SETTINGS = ("gongInAI", "gongTranscripts", "transcriptsInAI")  # all off unless you turn them on (Data page)
 
 
@@ -1345,7 +1427,8 @@ def now_iso():
 
 def write_records(kind, body):
     """Validate, merge and save one change. Returns the saved part."""
-    cleaners = {"company": clean_company, "person": clean_person, "call-notes": clean_call_notes, "apply": clean_apply, "settings": clean_settings}
+    cleaners = {"company": clean_company, "person": clean_person, "call-notes": clean_call_notes, "apply": clean_apply, "settings": clean_settings,
+                "hide-call": clean_hide_call}
     if kind not in cleaners:
         raise Invalid("unknown record type")
     c = cleaners[kind](body)
@@ -1387,6 +1470,15 @@ def write_records(kind, body):
         elif kind == "settings":
             r["settings"].update(c)
             out = dict(r["settings"])
+        elif kind == "hide-call":
+            # Only Overture's own list changes: the Google Calendar event is never deleted or edited.
+            hidden = r["hiddenCalls"]
+            hidden.pop(c["callId"], None)
+            if c["hidden"]:
+                hidden[c["callId"]] = now_iso()
+                for old in list(hidden)[:-MAX_HIDDEN_CALLS]:  # oldest first (a dict keeps the order they were added in)
+                    del hidden[old]
+            out = {"callId": c["callId"], "hidden": c["hidden"]}
         else:
             items = r["updates"].setdefault(c["callId"], [])
             drop = {(u["kind"], u["text"]) for u in c["undo"]}
@@ -5127,9 +5219,9 @@ def connections_graph(records, call_ids, attendees=None):
     for c in (records.get("connections") or {}).values():
         if not isinstance(c, dict) or c.get("callId") not in call_ids:
             continue
-        frm = c.get("from") or "you"
-        if frm.startswith("p:") and attendees is not None and frm[2:] not in attendees:
-            frm = "you"
+        frm = c.get("from") or "you"  # said by someone Overture couldn't name: you, as before
+        if frm == NOBODY or (frm.startswith("p:") and attendees is not None and frm[2:] not in attendees):
+            frm = ""  # about someone who isn't on the map: the company or person shows, with no line to anyone
         when = (" at " + c["time"]) if c.get("time") else ""
         heard = {"meetily": "Heard on the call (Meetily)", "granola": "In Granola's transcript", "gong": "In Gong's transcript"}.get(c.get("via"))
         by = (c.get("speaker") + " mentioned them on the call" + when + ".") if c.get("speaker") and not c["speaker"].lower().startswith("your note") \
@@ -5147,6 +5239,8 @@ def connections_graph(records, call_ids, attendees=None):
             nid = "co:" + c["name"]
             nodes.append({"id": nid, "type": "company", "label": c["name"], "callId": c["callId"], "mentioned": True, "relation": c.get("relation", "")})
             why = by + ((" “" + c["said"] + "”") if c.get("said") else (" Relation found on the web." if c.get("sources") else ""))
+        if not frm:
+            continue
         edges.append({"a": frm, "b": nid, "kind": "mentioned", "label": c.get("label") or "mentioned", "why": why.strip(), "src": "call",
                       "callId": c["callId"], "connId": c["id"], "mentionId": c.get("mentionId", ""), "source": c.get("source", ""),
                       "sources": c.get("sources") or [], "likely": bool(c.get("likely")), "explain": explain})
@@ -5464,7 +5558,7 @@ def _said_view(said):
 
 def _brief_view(it):
     """The live AI pass's brief on a mention: what it is, why it matters on this call, and what the captions said for a misheard name."""
-    out = {k: clean_text(it.get(k), n) for k, n in (("why", 240), ("about", 240), ("heardAs", 120)) if it.get(k)}
+    out = {k: clean_text(it.get(k), n) for k, n in (("why", 240), ("about", 240), ("heardAs", 120), ("companyHeard", 120)) if it.get(k)}
     if it.get("at"):
         out["at"] = str(it["at"])
     return out
@@ -5700,11 +5794,37 @@ def _semantic_call(ctx):
     if not ctx:
         return {}
     inv = ctx.get("invite") or {}
-    guests = [a.get("name", "") for a in inv.get("attendees") or [] if isinstance(a, dict) and a.get("name")]
+    bare = lambda n: str(n or "").split("@")[0]  # a guest named by their address (no name on the invite): never send the address
+    guests = [bare(a.get("name", "")) for a in inv.get("attendees") or [] if isinstance(a, dict) and a.get("name")]
     return {"title": clean_text(inv.get("title"), 160), "company": ctx.get("company", ""),
             "companies": [c for c in [ctx.get("company", "")] + list(ctx.get("orgs") or {})[:150] if c],
             "people": [k.get("name", "") for k in (ctx.get("known") or [])[:100] if isinstance(k, dict) and k.get("name")],
-            "skip": guests + sorted(ctx.get("me") or [])}
+            "skip": guests + sorted(ctx.get("me") or []),
+            "participants": [{"id": "you", "name": "You"}]
+                            + [{"id": "g" + str(i + 1), "name": bare(a.get("name")) or "Guest " + str(i + 1)} for i, a in enumerate(_guests(ctx))]}
+
+
+def _closest_org(name, ctx):
+    """A company the captions may have misheard ("DKS" for TKS): when Overture knows no company by the name as heard but knows
+    exactly one a letter or two away, that one. Returns (the name to use, what was heard, or "" when nothing changed)."""
+    n, known = _letters(norm_org(name)), [c for c in [ctx.get("company", "")] + list(ctx.get("orgs") or {}) if c]
+    if not n or any(_letters(norm_org(c)) == n for c in known):
+        return name, ""
+    near = {c for c in known if (k := _letters(norm_org(c))) and abs(len(k) - len(n)) <= 2
+            and SequenceMatcher(None, k, n).ratio() >= (0.6 if len(n) <= 4 else 0.8)}
+    return (near.pop(), name) if len(near) == 1 else (name, "")
+
+
+def _ai_node(e, ctx):
+    """Who the live pass says a name belongs with (its linkedTo), as a map node; "" when it didn't say."""
+    t, guests = e.get("linkedTo") or "", _guests(ctx)
+    if t == "you":
+        return "you"
+    if t == "other":
+        return NOBODY
+    if t[:1] == "g" and t[1:].isdigit() and 0 < int(t[1:]) <= len(guests):
+        return "p:" + guests[int(t[1:]) - 1]["email"]
+    return ""
 
 
 def _codename_near(name, text):
@@ -5725,11 +5845,20 @@ def _save_ai_mentions(call_id, ctx, heard, source="captions"):
     for k in known_full.values():
         known_first.setdefault(norm_name(k["name"]).split()[0], []).append(k)
     own = norm_org(ctx.get("company") or "")
+    misheard = []  # (speaker, time, the words as heard): the rules' own mention of those words is taken back
     for e in heard:
         text = e["quote"]["text"]
         if _codename_near(e["name"], text) or _codename_near(e["spoken"], text):
             continue
-        brief = {"why": e["why"], "about": e["about"], "heardAs": e["heardAs"], "aiFound": True}
+        brief = {"why": e["why"], "about": e["about"], "heardAs": e["heardAs"], "aiFound": True, "fromNode": _ai_node(e, ctx)}
+        if e["kind"] == "person" and e["company"]:
+            e["company"], brief["companyHeard"] = _closest_org(e["company"], ctx)
+        elif e["kind"] == "company":
+            e["name"], heard_as = _closest_org(e["name"], ctx)
+            brief["heardAs"] = brief["heardAs"] or heard_as
+        if brief["heardAs"] or brief.get("companyHeard"):
+            misheard.append((e["quote"].get("speaker", ""), e["quote"].get("time", ""), brief["heardAs"] or e["spoken"], brief.get("companyHeard", "")))
+        brief = {k: v for k, v in brief.items() if v}
         if e["kind"] == "person":
             nn = norm_name(e["name"])
             words = nn.split()
@@ -5755,8 +5884,15 @@ def _save_ai_mentions(call_id, ctx, heard, source="captions"):
                          "kind": "company", "count": 1, "quote": dict(e["quote"]), "si": None, "relation": None, **brief})
     if not people and not orgs:
         return
+    drop = set()
+    blk = (load_records().get("mentions") or {}).get(call_id) or {}
+    for speaker, time, words, co in misheard:  # e.g. the rules saved "Ravy" at "DKS" from the same caption
+        same = lambda it: not it.get("aiFound") and (it.get("quote") or {}).get("speaker", "") == speaker and (it.get("quote") or {}).get("time", "") == time
+        first = norm_name(words).split()[:1]
+        drop |= {it["key"] for it in blk.get("items") or [] if same(it) and first and norm_name(it.get("name", "")).split()[:1] == first}
+        drop |= {it["key"] for it in blk.get("orgs") or [] if same(it) and norm_org(it.get("name", "")) in {norm_org(words), norm_org(co)} - {""}}
     try:
-        block, new, go, wait, new_o, unqueue = save_mentions(call_id, ctx, people, source, orgs, bump=False)
+        block, new, go, wait, new_o, unqueue = save_mentions(call_id, ctx, people, source, orgs, bump=False, drop=frozenset(drop))
     except Invalid:
         return
     _unqueue(unqueue)
@@ -6015,17 +6151,124 @@ def gong_transcript_lines(inv, now=None):
     return lines
 
 
+FROM_V = 2  # 2: a mention's line goes to the person it's about. Mentions saved before that are placed again once (place_mentions).
+SELF_SPEAKERS = {"you", "your note", "your notes"}  # Meet's captions call you "You"
+ME_WORDS = {"i", "i'm", "im", "i've", "ive", "i'd", "i'll", "my", "me", "mine", "myself", "we", "we're", "we've", "we'd", "we'll", "our", "ours", "us"}
+YOU_WORDS = {"you", "your", "yours", "yourself", "you're", "youre", "you've", "youve", "you'd", "you'll", "youll", "ur"}
+THEM_WORDS = {"he", "he's", "his", "him", "she", "she's", "her", "hers", "they", "they're", "they've", "their", "theirs", "them",
+              "brother", "sister", "friend", "wife", "husband", "dad", "mom", "father", "mother", "son", "daughter", "cousin", "uncle",
+              "aunt", "roommate", "girlfriend", "boyfriend"}
+POSSESSIVE = {"my", "our", "your", "yours", "ur", "his", "her", "their"}
+YOU_FILLER = re.compile(r"\b(?:you know|you see|you mean|thank you|see you|mind you)\b", re.I)
+NOBODY = "-"  # about someone who isn't on the call ("my brother", "they"): the company shows on the map with no line to anyone
+
+
+def _letters(s):
+    return re.sub(r"[^a-z]", "", str(s or "").lower())
+
+
+def _guests(ctx):
+    return [a for a in (ctx.get("invite") or {}).get("attendees") or [] if isinstance(a, dict) and a.get("email")]
+
+
+def _guest(speaker, ctx):
+    """The calendar guest a speaker is: the same name, a unique first name, or the name Meet shows ("Shlok Parekh") against the one
+    the calendar made from an email address ("Shlokparekh112"). With one guest, anyone who isn't you is them. None if Overture can't tell."""
+    atts, n = _guests(ctx), norm_name(speaker)
+    if not n or not atts:
+        return None
+    a = next((a for a in atts if norm_name(a.get("name", "")) == n), None)
+    if not a:
+        same = [a for a in atts if norm_name(a.get("name", "")).split()[:1] == n.split()[:1]]
+        a = same[0] if len(same) == 1 else None
+    if not a:
+        full, first = _letters(n), _letters(n.split()[0])
+        same = [a for a in atts if len(first) >= 3 and any(x and (x.startswith(first) or (len(x) >= 4 and full.startswith(x)))
+                                                         for x in (_letters(a.get("name", "")), _letters(str(a["email"]).split("@")[0])))]
+        a = same[0] if len(same) == 1 else None
+    return a or (atts[0] if len(atts) == 1 else None)
+
+
+def _guest_named(word, guests):
+    """The one guest whose first name is this word, or whose calendar name made from an email ("Shlokparekh112") starts with it."""
+    w = _letters(word)
+    hits = [a for a in guests if norm_name(a.get("name", "")).split()[:1] == [word]
+            or (len(w) >= 4 and len(norm_name(a.get("name", "")).split()) == 1 and _letters(a.get("name", "")).startswith(w))]
+    return hits[0] if len(hits) == 1 else None
+
+
 def _from_node(speaker, ctx):
     """Who said it, as a map node: "you" for you and your notes, "p:<email>" for a guest, "" when Overture can't tell."""
-    if not speaker or _is_me(speaker, ctx):
+    if not speaker or _is_me(speaker, ctx) or norm_name(speaker) in SELF_SPEAKERS:
         return "you"
-    n = norm_name(speaker)
-    atts = (ctx.get("invite") or {}).get("attendees") or []
-    a = next((a for a in atts if norm_name(a["name"]) == n), None)
-    if not a:
-        same = [a for a in atts if norm_name(a["name"]).split()[:1] == n.split()[:1]]
-        a = same[0] if len(same) == 1 else None
+    a = _guest(speaker, ctx)
     return "p:" + a["email"] if a else ""
+
+
+def _about_node(quote, ctx, name="", near=0):
+    """Who a mention is about, as a map node, from the closest word to it in its sentence: "I/we/my" is whoever said it, "you/your"
+    the person they're talking to ("I hear you're an intern at Microsoft" said by you: the guest), a guest's name that guest,
+    "he/they/my brother" someone not on the call (NOBODY). No such word: whoever said it. near: a person's name looks only that many
+    words back, at "my/your/his" ("your manager Ravi" is the guest's; "you should meet Ravi" is just said by you)."""
+    q = quote if isinstance(quote, dict) else {}
+    said_by = _from_node(q.get("speaker") or "", ctx)
+    text, name = str(q.get("text") or "").replace("\u2019", "'"), str(name or "").replace("\u2019", "'")
+    at = text.lower().find(name.lower()) if name else -1
+    before, after = (text[:at], text[at + len(name):]) if at >= 0 else (text, "")
+    before, after = re.split(r"[.!?;:]\s", before)[-1], re.split(r"[.!?;:](?:\s|$)", after)[0]
+    words = lambda s: [w for w in re.findall(r"[A-Za-z][A-Za-z']*", YOU_FILLER.sub(" ", s)) if w != "US"]
+    look = words(before)[::-1][:near] if near else words(before)[::-1] + words(after)
+    guests = _guests(ctx)
+    for w in look:
+        low = w.lower()
+        if near and low not in POSSESSIVE:
+            continue
+        if low in ME_WORDS:
+            return said_by
+        if low in YOU_WORDS:
+            if said_by == "you":
+                return "p:" + guests[0]["email"] if len(guests) == 1 else NOBODY
+            return "you" if said_by and len(guests) == 1 else NOBODY
+        if low in THEM_WORDS:
+            return NOBODY
+        if w[0].isupper() and len(low) >= 3:
+            if low in ctx.get("meFirst", ()):
+                return "you"
+            g = _guest_named(low, guests)
+            if g:
+                return "p:" + g["email"]
+    return said_by
+
+
+def place_mentions(records, invites, me):
+    """Mentions saved before FROM_V get their map line placed again, once each: on the person they're about, with Meet's name for a
+    guest matched to the calendar's. Returns the records to show (the saved ones when anything moved)."""
+    me_names = {norm_name(x) for x in ((me or {}).get("name", ""), "Chris") if x}
+    ctxs = {i["id"]: {"invite": i, "me": me_names, "meFirst": {n.split()[0] for n in me_names if n}} for i in invites}
+
+    def place(r, write):
+        moved = False
+        for cid, ctx in ctxs.items():
+            b = (r.get("mentions") or {}).get(cid)
+            if not isinstance(b, dict):
+                continue
+            todo = [(it, 3) for it in b.get("items") or [] if isinstance(it, dict) and it.get("fromV") != FROM_V] \
+                + [(it, 0) for it in b.get("orgs") or [] if isinstance(it, dict) and it.get("fromV") != FROM_V]
+            if todo and write:
+                for it, near in todo:
+                    it.update(fromNode=_about_node(it.get("quote"), ctx, it.get("heardAs") or it.get("name") or it.get("role") or "", near), fromV=FROM_V)
+                sync_connections(r, cid)
+            moved = moved or bool(todo)
+        return moved
+
+    if not place(records, False):
+        return records
+    with RECORDS_LOCK:
+        r = load_records()
+        if place(r, True):
+            save_json(records_path(), r)
+            return r
+    return records
 
 
 def normalize_cued_names(lines):
@@ -6126,9 +6369,14 @@ def save_mentions(call_id, ctx, found, source, orgs=None, bump=True, now=None, d
         new = []
         blocker = lookup_blocker(block, auto, r)
         for f in found:
+            if str(f.get("role") or "").startswith("at ") and not f.get("companyHeard"):  # "Ravy from DKS" when Overture only knows TKS
+                co, was = _closest_org(f["role"][3:], ctx)
+                f = dict(f, role="at " + co, companyHeard=was) if was else f
             old = have.get(f["key"])
             if old:
-                old.update({k: f[k] for k in ("why", "about", "heardAs") if f.get(k) and not old.get(k)})
+                old.update({k: f[k] for k in ("why", "about", "heardAs", "companyHeard") if f.get(k) and not old.get(k)})
+                if f.get("fromNode"):  # the live pass read the conversation: who it belongs with beats the word rules
+                    old.update(fromNode=f["fromNode"], fromV=FROM_V)
                 if bump:
                     old["count"] = int(old.get("count") or 1) + f["count"]
                 if f.get("said") and not old.get("said"):
@@ -6139,8 +6387,9 @@ def save_mentions(call_id, ctx, found, source, orgs=None, bump=True, now=None, d
             it = {"id": hashlib.sha256((call_id + "|" + f["key"]).encode("utf-8")).hexdigest()[:12], "key": f["key"], "name": f["name"],
                   "role": f["role"], "kind": f["kind"], "count": f["count"], "quote": f["quote"], "source": source, "at": now_iso(),
                   "person": None, "candidates": [], "note": "", "confirmed": False, "added": False, "hubspot": "",
-                  "said": f.get("said") or None, "fromNode": _from_node(f["quote"].get("speaker"), ctx), "autoFound": False,
-                  **{k: f[k] for k in ("why", "about", "heardAs", "aiFound") if f.get(k)}}
+                  "said": f.get("said") or None, "autoFound": False, "fromV": FROM_V,
+                  "fromNode": f.get("fromNode") or _about_node(f["quote"], ctx, f.get("heardAs") or f["name"] or f.get("role") or "", 3),
+                  **{k: f[k] for k in ("why", "about", "heardAs", "companyHeard", "aiFound") if f.get(k)}}
             scope = person_mention_scope(block, it, r)
             if it.get("role", "").startswith("at "):
                 it.update(mentionedCompany=scope["company"], mentionedDomain=scope["domain"])
@@ -6164,6 +6413,8 @@ def save_mentions(call_id, ctx, found, source, orgs=None, bump=True, now=None, d
             rel, old = o.get("relation"), have_o.get(o["key"])
             if old:
                 old.update({k: o[k] for k in ("why", "about", "heardAs") if o.get(k) and not old.get(k)})
+                if o.get("fromNode"):
+                    old.update(fromNode=o["fromNode"], fromV=FROM_V)
                 if o.get("aiFound"):
                     continue  # the AI pass adds its brief; the rules' wait for an explanation stays as it is
                 if bump:
@@ -6183,7 +6434,7 @@ def save_mentions(call_id, ctx, found, source, orgs=None, bump=True, now=None, d
                 break
             it = {"id": hashlib.sha256((call_id + "|" + o["key"]).encode("utf-8")).hexdigest()[:12], "key": o["key"], "name": o["name"],
                   "domain": o.get("domain") or "", "kind": "company", "count": o["count"], "quote": o["quote"], "source": source, "at": now_iso(),
-                  "fromNode": _from_node(o["quote"].get("speaker"), ctx), "relation": None, "note": "", "removed": False, "waitUntil": 0,
+                  "fromNode": o.get("fromNode") or _about_node(o["quote"], ctx, o.get("heardAs") or o["name"]), "fromV": FROM_V, "relation": None, "note": "", "removed": False, "waitUntil": 0,
                   **{k: o[k] for k in ("why", "about", "heardAs", "aiFound") if o.get(k)}}
             if rel:
                 it.update(status="said", relation=rel)  # the call explained it: no web lookup
@@ -7425,6 +7676,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(200, dict(claude_key_state(), ok=True))
         if path == "/api/records/apply":
             return self.handle_write("apply")
+        if path == "/api/calls/hide":  # remove a call from Overture (or put it back): the same guards as every records write
+            return self.handle_write("hide-call")
         if path == "/auth/google/disconnect":
             if not write_guard_ok(self.headers):
                 return self.send_json(403, {"error": "not allowed"})

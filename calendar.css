@@ -181,3 +181,19 @@
 :root[data-theme="dark"] :is(.cal-ev, .ag-ev):hover { transform: none; background: color-mix(in srgb, var(--ev-bg) 24%, var(--hover)); }
 :root[data-theme="dark"] .ev-co { font-weight: 700; }
 @media (prefers-reduced-motion: reduce) { :root[data-theme="dark"] :is(.cal-ev, .ag-ev) { transition: none; } }
+
+/* ---------- remove a call from Overture (never from Google Calendar): a small trash button on its block or card ---------- */
+.ev-rm {
+  position: absolute; z-index: 5; display: inline-grid; place-items: center; width: 26px; height: 26px; padding: 0;
+  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); color: var(--ink-2); cursor: pointer;
+}
+.ev-rm .ic { width: 14px; height: 14px; }
+.ev-rm:hover { background: var(--hover); color: var(--ink); }
+/* In the week it shows while its block is hovered or focused; in the lists (agenda, By priority) it always shows. */
+.cal-col > .ev-rm { right: 9px; width: 22px; height: 22px; opacity: 0; pointer-events: none; transition: opacity var(--t-med) var(--ease); }
+.cal-col > .ev-rm .ic { width: 12px; height: 12px; }
+.cal-ev:hover + .ev-rm, .cal-ev:focus-visible + .ev-rm, .cal-col > .ev-rm:hover, .cal-col > .ev-rm:focus-visible { opacity: 1; pointer-events: auto; }
+.ag-row, .prio-item { position: relative; }
+.ag-row > .ev-rm, .prio-item > .ev-rm { top: 8px; right: 8px; }
+.ag-row .ev-in, .prio-item .ev-in { padding-right: 42px; }
+@media (prefers-reduced-motion: reduce) { .cal-col > .ev-rm { transition: none; } }

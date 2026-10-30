@@ -934,6 +934,7 @@
 
   // ---------- relationship graph (for the people map) ----------
   // Nodes: you, prospect companies, the people at them, and the places they came from. Edges carry a kind and a short label.
+  const GROUP_PERSONAL = "grp:personal";
   function relationshipGraph() {
     const nodes = [{ id: "you", type: "you", label: "You", sub: MODE === "demo" ? "Chris · Spotify" : ME.name === "You" ? "You" : ME.name, src: "sample" }];
     const edges = [];
@@ -942,19 +943,36 @@
       if (!nodes.some((n) => n.id === id)) {
         const c = D.companies[name] || null;
         const ad = findAdopter(name);
-        const prospect = D.invites.find((i) => i.company === name);
+        const prospect = D.invites.find((i) => i.company === name && !i.noCompany);
         nodes.push({ id, type: prospect ? "prospect" : "past", label: ad ? ad.org : name, callId: prospect ? prospect.id : null,
           status: c ? c.status.replace(/: .*/, "") + (c.customer ? "" : "") : ad ? "Backstage adopter" : "",
           customer: !!(c && c.customer), adopter: !!ad, src: c ? "sample" : ad ? "pub" : "sample", engineers: c ? c.engineers : null });
       }
       return id;
     };
+    // A call with no guest from a company (server.py's noCompany: personal email, or just you) has no company to group under, so
+    // its title never becomes one: its guests share one "Personal email" group, and people mentioned on it sit under the call's name.
+    const group = (id, label, inv) => {
+      let n = nodes.find((x) => x.id === id);
+      if (!n) nodes.push(n = { id, type: "prospect", group: true, label, callId: id === GROUP_PERSONAL ? null : inv.id, calls: [], status: "", src: "call" });
+      if (!n.calls.includes(inv.id)) n.calls.push(inv.id);
+      return id;
+    };
+    const frameFor = (inv) => {
+      const id = inv.noCompany ? group(GROUP_PERSONAL, "Personal email", inv) : company(inv.company);
+      const n = nodes.find((x) => x.id === id);
+      if (n.type === "prospect" && !n.group) { n.calls = n.calls || []; if (!n.calls.includes(inv.id)) n.calls.push(inv.id); }
+      return id;
+    };
     D.invites.forEach((inv) => {
-      const co = company(inv.company);
+      if (!inv.attendees.length) return; // just you: nobody to draw, so no empty group
+      const co = frameFor(inv);
       inv.attendees.forEach((a) => {
         const p = D.people[a.email] || {};
         const id = "p:" + a.email;
-        nodes.push({ id, type: "person", label: a.name, sub: p.title || "Title unknown", company: co, callId: inv.id, startedAt: p.startedAt, src: "sample", note: p.note || "", previous: p.previous || "" });
+        const seen = nodes.find((n) => n.id === id);
+        if (seen) { if (!seen.calls.includes(inv.id)) seen.calls.push(inv.id); return; } // on more than one call: still one card
+        nodes.push({ id, type: "person", label: a.name, sub: p.title || "Title unknown", company: co, callId: inv.id, calls: [inv.id], startedAt: p.startedAt, src: "sample", note: p.note || "", previous: p.previous || "" });
         if (p.previous) {
           const prevId = company(p.previous);
           const prev = nodes.find((n) => n.id === prevId);
@@ -976,7 +994,9 @@
         return;
       }
       if (nodes.some((x) => x.id === m.id)) return;
-      nodes.push({ id: m.id, type: "person", label: m.label, sub: "Mentioned · " + (m.sub || "on the call"), company: company(m.company), callId: m.callId,
+      const inv = D.invites.find((i) => i.id === m.callId);
+      const co = inv && inv.noCompany && m.company === inv.company ? group("grp:call:" + inv.id, "Mentioned on " + inv.company, inv) : company(m.company);
+      nodes.push({ id: m.id, type: "person", label: m.label, sub: "Mentioned · " + (m.sub || "on the call"), company: co, callId: m.callId,
         src: "call", mentioned: m.callId, auto: !!m.auto, note: "", previous: "" });
     });
     (D.relationships || []).forEach((r) => { if (!(r.kind === "mentioned" && hiddenIds.has(r.b))) edges.push(Object.assign({ src: "sample" }, r)); });

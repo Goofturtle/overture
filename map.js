@@ -35,8 +35,11 @@
   // One call, stacked: the company frame with its people on the left, whoever each person connects to on the right.
   function stackLayout(graph, callId) {
     const pos = {};
-    const co = graph.nodes.find((n) => n.type === "prospect" && n.callId === callId);
-    const people = graph.nodes.filter((n) => n.type === "person" && n.company === co.id);
+    // A company (or the "Personal email" group) can hold several calls: take the one with this call, and only this call's people.
+    const onCall = (n) => (n.calls || [n.callId]).includes(callId);
+    const co = graph.nodes.find((n) => n.type === "prospect" && onCall(n));
+    const people = co ? graph.nodes.filter((n) => n.type === "person" && n.company === co.id && onCall(n)) : [];
+    if (!people.length) return { pos, frames: [], keep: new Set() }; // just you on this call: nobody to draw
     const keep = new Set(people.map((p) => p.id));
     const xA = S.person[0] / 2, xB = S.person[0] + F.colGap;
     let y = F.head + F.pad, lastB = -Infinity;
@@ -72,11 +75,13 @@
     let x = 0;
     prospects.forEach((co) => {
       const inside = people.filter((p) => p.company === co.id);
+      if (!inside.length) return; // a company with nobody to show gets no empty frame
       const h = FRAME.head + inside.length * (SIZE.person[1] + FRAME.gapY) - FRAME.gapY + FRAME.pad * 2;
       frames.push({ id: co.id, node: co, x, y: 140, w: FRAME.w, h, members: inside.map((p) => p.id) });
       inside.forEach((p, i) => { pos[p.id] = { x: x + FRAME.pad + SIZE.person[0] / 2, y: 140 + FRAME.head + FRAME.pad + i * (SIZE.person[1] + FRAME.gapY) + SIZE.person[1] / 2 }; });
       x += FRAME.w + FRAME.gapX;
     });
+    if (!frames.length) return { pos, frames }; // nobody on any call yet: an empty board
     const width = x - FRAME.gapX;
     const bottom = Math.max(...frames.map((f) => f.y + f.h));
     pos.you = { x: width / 2, y: 40 };
@@ -179,9 +184,11 @@
 
     function frameHtml(f) {
       const n = f.node;
-      return '<div class="frame" data-frame="' + esc(f.id) + '" style="left:' + f.x + "px;top:" + f.y + "px;width:" + f.w + "px;height:" + f.h + 'px">'
-        + '<button type="button" class="frame-head" data-id="' + esc(n.id) + '" aria-label="' + esc(n.label + ", " + (n.status || "") + ", " + f.members.length + " people") + '">'
-        + window.C.coTile(n.label, "co-tile") + '<span class="frame-name">' + esc(n.label) + "</span>"
+      // A group that is not a company ("Personal email", or people mentioned on a call with no company) gets an icon, not a letter tile.
+      const tile = n.group ? '<span class="co-tile grp-tile" aria-hidden="true">' + ic(n.callId ? "calendar" : "users") + "</span>" : window.C.coTile(n.label, "co-tile");
+      return '<div class="frame' + (n.group ? " group" : "") + '" data-frame="' + esc(f.id) + '" style="left:' + f.x + "px;top:" + f.y + "px;width:" + f.w + "px;height:" + f.h + 'px">'
+        + '<button type="button" class="frame-head" data-id="' + esc(n.id) + '" aria-label="' + esc(n.label + ", " + (n.status ? n.status + ", " : "") + f.members.length + " people") + '">'
+        + tile + '<span class="frame-name">' + esc(n.label) + "</span>"
         + (n.status ? '<span class="frame-chip ' + window.C.tagFor("status", n.status) + '">' + esc(n.status) + "</span>" : "") + "</button></div>";
     }
 
@@ -201,6 +208,7 @@
         };
       }
       const fs = lay.frames.slice().sort((a, b) => a.x - b.x), GUT = 30;
+      if (!fs.length) return () => []; // an empty board has no lines to route
       const top = Math.min(...fs.map((f) => f.y)), bottom = Math.max(...fs.map((f) => f.y + f.h));
       const yT = top - 36, yB = bottom + 36;
       const gutters = fs.map((f, i) => (i ? (fs[i - 1].x + fs[i - 1].w + f.x) / 2 : f.x - GUT)).concat([fs[fs.length - 1].x + fs[fs.length - 1].w + GUT]);
@@ -366,7 +374,9 @@
           connId: e.connId || "", mentionId: e.mentionId || "", callId: e.callId || "", sources: e.sources || [],
           explain: e.kind === "mentioned" ? window.C.explainFor(e) : null };
       });
-      if (n.type === "person") rels.unshift({ other: byId[n.company].label, otherId: n.company, kind: "works", label: "works at", why: n.label + " is " + n.sub + " at " + byId[n.company].label + ".", src: "sample" });
+      const co = n.type === "person" ? byId[n.company] : null;
+      if (co && !co.group) rels.unshift({ other: co.label, otherId: n.company, kind: "works", label: "works at", why: n.label + " is " + n.sub + " at " + co.label + ".", src: "sample" });
+      else if (co && !co.callId) rels.unshift({ other: co.label, otherId: n.company, kind: "personal", label: "", why: "Overture can't tell where " + n.label + " works from a personal email address.", src: "sample" });
       return { node: n, rels, callId: n.callId || (n.company && byId[n.company].callId) || null };
     }
 

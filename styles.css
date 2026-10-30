@@ -49,6 +49,15 @@
 .nav .count .ic { width: 14px; height: 14px; color: var(--chrome-muted); }
 .nav .count.strong { color: var(--on-accent); font-weight: 600; font-size: 11px; display: inline-grid; }
 .nav .status { font-size: 12px; color: var(--chrome-muted); }
+/* Remove a call from Overture (never from Google Calendar): a small trash button beside each call in the rail. */
+.nav-week li { position: relative; display: flex; align-items: center; gap: 2px; }
+.nav-week li > a { flex: 1; min-width: 0; }
+.nav-rm {
+  display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; flex: none; border: 0; border-radius: var(--r-md);
+  background: none; color: var(--chrome-muted); cursor: pointer; transition: background-color var(--t-fast) ease, color var(--t-fast) ease;
+}
+.nav-rm .ic { width: 14px; height: 14px; }
+.nav-rm:hover { background: var(--chrome-hover); color: var(--chrome-ink); }
 .rail-foot { flex: none; padding-top: 8px; border-top: 1px solid var(--chrome-line); margin-top: 8px; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 10px 8px 0; }
 .rail .src { color: var(--chrome-muted); }
@@ -549,6 +558,14 @@ h1 { font-size: 24px; line-height: 1.33; font-weight: 600; letter-spacing: -0.01
   .rail .nav-week a { width: 44px; min-height: 0; height: 44px; padding: 0; }
   .rail .nav-week .sq { width: 30px; height: 30px; border-radius: 9px; font-size: 13px; }
   .rail .nav-week .label, .rail .nav-week .count { display: none; }
+  /* Remove a call: on the slim rail, a small round badge on the call's square while it is hovered or focused. */
+  .rail .nav-week li > a { flex: none; }
+  .rail .nav-week .nav-rm {
+    position: absolute; top: -4px; right: 0; width: 22px; height: 22px; border-radius: var(--r-full); background: var(--surface); color: var(--ink-2);
+    box-shadow: 0 1px 3px rgba(23, 24, 26, 0.2); opacity: 0; pointer-events: none;
+  }
+  .rail .nav-week .nav-rm .ic { width: 12px; height: 12px; }
+  .rail .nav-week li:hover .nav-rm, .rail .nav-week li:focus-within .nav-rm { opacity: 1; pointer-events: auto; }
   .rail-foot { border-top-color: var(--chrome-line); }
   .rail-foot .legend { display: none; }
   .topbar { border-radius: 16px 16px 0 0; }

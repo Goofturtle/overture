@@ -21,6 +21,7 @@
     list: '<path d="M3 12h.01M3 18h.01M3 6h.01M8 12h13M8 18h13M8 6h13"/>',
     cornerDownLeft: '<path d="M20 4v7a4 4 0 0 1-4 4H4"/><path d="m9 10-5 5 5 5"/>',
     mic: '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3"/>',
+    trash: '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><path d="M10 11v6M14 11v6"/>',
   });
 
   // ---------- state ----------
@@ -38,9 +39,10 @@
   const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   const announce = (t) => { const el = $("#announce"); el.textContent = ""; setTimeout(() => { el.textContent = t; }, 50); };
   const isOnCall = (id) => app.view === "call" && app.callId === id;
-  const companyNames = () => Array.from(new Set(D.invites.map((i) => i.company).concat(Object.keys(D.companies))));
+  // A call with no guest from a company (noCompany: personal email, or just you) is named by its title, which is never a company.
+  const companyNames = () => Array.from(new Set(D.invites.filter((i) => !i.noCompany).map((i) => i.company).concat(Object.keys(D.companies))));
   const companyBySlug = (s) => companyNames().find((n) => slug(n) === s) || null;
-  const callForCompany = (name) => D.invites.find((i) => i.company === name) || null;
+  const callForCompany = (name) => D.invites.find((i) => i.company === name && !i.noCompany) || null;
   const today = () => { const [y, m, d] = D.today.split("-").map(Number); return new Date(y, m - 1, d); };
   // Live invites carry their start (ET, ISO), so a call in January is read as next year's.
   const callDate = (inv) => { const w = splitWhen(inv.when); return new Date(+String(inv.start || D.today).slice(0, 4), MONTHS.indexOf(w.month), +w.date); };
@@ -98,12 +100,18 @@
     + (sub ? '<p class="page-sub">' + sub + "</p>" : "") + "</header>";
   const names = (inv) => { const n = inv.attendees.map((a) => a.name); return n.length > 1 ? n.slice(0, -1).join(", ") + " and " + n[n.length - 1] : n[0]; };
   const kindOf = (inv) => inv.title.split(":")[0];
+  // Remove a call from Overture (the rail, the call page, the Calls page): a small trash button. Google Calendar is never changed.
+  const callName = (inv) => inv.company + " " + splitWhen(inv.when).day;
+  const removeBtn = (inv, cls, style) => '<button type="button" class="' + cls + '" data-hide-call="' + esc(inv.id) + '" aria-label="' + esc("Remove " + callName(inv) + " from Overture")
+    + '" title="' + esc("Remove " + callName(inv) + " from Overture") + '"' + (style ? ' style="' + esc(style) + '"' : "") + ">" + ic("trash") + "</button>";
 
-  // ---------- toast (only for "brief ready" while you are elsewhere) ----------
-  let toastTimer = null;
+  // ---------- toast (only for "brief ready" while you are elsewhere, and Undo after removing a call) ----------
+  let toastTimer = null, toastAction = null;
+  // href: a page to open, or a function to run (Undo).
   function toast(text, actionLabel, href) {
     const el = $("#toast");
-    el.innerHTML = '<span class="toast-text">' + esc(text) + "</span>" + (actionLabel ? '<button type="button" class="btn secondary sm" data-toast-go="' + esc(href) + '">' + esc(actionLabel) + "</button>" : "")
+    toastAction = typeof href === "function" ? href : null;
+    el.innerHTML = '<span class="toast-text">' + esc(text) + "</span>" + (actionLabel ? '<button type="button" class="btn secondary sm" ' + (toastAction ? "data-toast-act" : 'data-toast-go="' + esc(href) + '"') + ">" + esc(actionLabel) + "</button>" : "")
       + '<button type="button" class="x" data-toast-close aria-label="Dismiss">' + ic("x") + "</button>";
     el.hidden = false;
     clearTimeout(toastTimer);
@@ -128,7 +136,8 @@
     // Asana's sidebar projects: this week's calls, each with its company colour.
     $("#navWeekLabel").hidden = !D.invites.length;
     $("#navWeek").innerHTML = D.invites.map((i) => '<li><a href="#/calls/' + i.id + '" title="' + esc(i.company + ", " + splitWhen(i.when).day) + '"' + (cur === "call" && app.callId === i.id ? ' aria-current="page"' : "")
-      + '><span class="sq" aria-hidden="true" style="background:' + C.solid(i.company) + '">' + esc(i.company.charAt(0)) + '</span><span class="label">' + esc(i.company) + '</span><span class="count">' + esc(splitWhen(i.when).day.slice(0, 3)) + "</span></a></li>").join("");
+      + '><span class="sq" aria-hidden="true" style="background:' + C.solid(i.company) + '">' + esc(i.company.charAt(0)) + '</span><span class="label">' + esc(i.company) + '</span><span class="count">' + esc(splitWhen(i.when).day.slice(0, 3)) + "</span></a>"
+      + removeBtn(i, "nav-rm") + "</li>").join("");
     $("#navFoot").innerHTML = link("#/settings", "settings", "Settings", "", cur === "settings" || cur === "guides")
       + link("#/data", "database", "Data", '<span class="status">' + (C.state.liveData ? "Live" : "Saved") + "</span>", cur === "data");
   }
@@ -578,11 +587,11 @@
     const head = days.map((d, i) => '<div class="cal-dh' + (i === ti ? " is-today" : "") + '"><span class="cal-dow">' + dow(d) + '</span><span class="cal-dnum">' + d.getDate() + "</span>"
       + (i === ti ? '<span class="sr-only">, today</span>' : "") + "</div>").join("");
     const cols = days.map((d, i) => '<div class="cal-col' + (i === ti ? " is-today" : d.getDay() % 6 === 0 ? " is-off" : "") + '">'
-      + byDay[i].map((inv) => { const s = callSpan(inv); return calEvent(inv, "cal-ev", "top:" + Math.round((s.from - start) * H) + "px;height:" + Math.round((s.to - s.from) * H) + "px"); }).join("")
+      + byDay[i].map((inv) => { const s = callSpan(inv), y = Math.round((s.from - start) * H); return calEvent(inv, "cal-ev", "top:" + y + "px;height:" + Math.round((s.to - s.from) * H) + "px") + removeBtn(inv, "ev-rm", "top:" + (y + 3) + "px"); }).join("")
       + (i === ti ? '<span class="cal-now" style="top:' + nowY + 'px" aria-hidden="true"></span>' : "") + "</div>").join("");
     const agenda = days.map((d, i) => '<section class="ag-day' + (i === ti ? " is-today" : "") + '"><h2 class="sr-only">' + esc(long(d)) + (i === ti ? ", today" : "") + "</h2>"
       + '<div class="ag-date" aria-hidden="true"><span class="cal-dow">' + dow(d) + '</span><span class="cal-dnum">' + d.getDate() + "</span></div>"
-      + '<div class="ag-list">' + (byDay[i].length ? byDay[i].map((inv) => calEvent(inv, "ag-ev")).join("") : '<p class="ag-none">' + (i === ti ? "No calls today" : "No calls") + "</p>") + "</div></section>").join("");
+      + '<div class="ag-list">' + (byDay[i].length ? byDay[i].map((inv) => '<div class="ag-row">' + calEvent(inv, "ag-ev") + removeBtn(inv, "ev-rm") + "</div>").join("") : '<p class="ag-none">' + (i === ti ? "No calls today" : "No calls") + "</p>") + "</div></section>").join("");
 
     const viewSeg = '<div class="seg cal-views" role="group" aria-label="Show">' + [["week", "Week"], ["priority", "By priority"]].map(([k, l]) => '<button type="button" data-cal-view="' + k + '" aria-pressed="' + (CAL.view === k) + '">' + l + "</button>").join("") + "</div>";
     if (CAL.view === "priority") {
@@ -590,7 +599,7 @@
       const list = D.invites.filter((inv) => !inv.ended).map((inv, i) => ({ inv, i, p: C.priority(inv.company) })).sort((a, b) => b.p.score - a.p.score || a.i - b.i);
       sec.innerHTML = '<header class="page-head cal-top"><div class="page-head-row"><h1 class="page-title" tabindex="-1">Calls</h1>' + srcTag(SRC.calendar) + viewSeg
         + '<span class="grow"></span><p class="cal-sum">' + plural(list.length, "call") + ' · <a href="#/settings/priorities">Priority rules</a></p></div></header>'
-        + (list.length ? '<ol class="prio-list" role="list">' + list.map(({ inv, p }) => '<li class="prio-item">' + calEvent(inv, "ag-ev")
+        + (list.length ? '<ol class="prio-list" role="list">' + list.map(({ inv, p }) => '<li class="prio-item">' + calEvent(inv, "ag-ev") + removeBtn(inv, "ev-rm")
           + '<p class="prio-why">' + C.priorityBadge(inv.company) + "<span>" + esc(p.why.length ? p.why.join(" · ") : "No priority rules match") + "</span></p></li>").join("") + "</ol>"
           : '<p class="list-foot">No calls to rank yet.</p>');
       sec.onclick = (e) => { const v = e.target.closest("[data-cal-view]"); if (v) { CAL.view = v.dataset.calView; renderCallsPage(); $('[data-cal-view="' + CAL.view + '"]', sec).focus(); } };
@@ -1580,6 +1589,11 @@
     $("#openInCall").href = "#/live";
     $("#openInCall").dataset.call = id;
     $("#openInCall").innerHTML = ic("panel") + "In-call panel";
+    const rm = $("#hideCall"), rmLabel = "Remove " + callName(inv) + " from Overture"; // in the bar over Brief and After the call
+    rm.dataset.hideCall = id;
+    rm.setAttribute("aria-label", rmLabel);
+    rm.title = rmLabel;
+    rm.innerHTML = ic("trash");
     if (!done) showTab("brief");
     if (!run) return renderStart(inv);
     if (runningId === id) return renderRunning(run);
@@ -2090,11 +2104,12 @@
         + '<h3 class="sub-label">What the agent noticed</h3>' + insights().map((t) => '<p class="map-insight">' + esc(t) + "</p>").join("");
     }
     const n = d.node;
-    const kindWord = { warm: "Warm link", moved: "Past job or talk", together: "Worked together", works: "Works there", mentioned: "Mentioned on a call" };
-    // What Overture found about this guest or company (profile.js), above the list of links.
+    const kindWord = { warm: "Warm link", moved: "Past job or talk", together: "Worked together", works: "Works there", mentioned: "Mentioned on a call", personal: "Personal email" };
+    // What Overture found about this guest or company (profile.js), above the list of links. A group ("Personal email") is no company.
     const guest = n.type === "person" && n.id.startsWith("p:") ? n.id.slice(2) : "";
     const found = guest ? window.CP.briefPerson(guest, profileLinks) || C.researchHtml(Object.assign({ name: n.label, email: guest }, D.people[guest] || {}))
-      : n.type === "prospect" || n.type === "past" ? window.CP.orgMini(n.label, profileLinks) : "";
+      : (n.type === "prospect" || n.type === "past") && !n.group ? window.CP.orgMini(n.label, profileLinks) : "";
+    const callOf = n.type === "person" ? inviteById(n.callId) : null;
     return '<h2 tabindex="-1" id="mapSideH">' + esc(n.label) + '</h2><p class="meta">' + esc([n.sub, n.status].filter(Boolean).join(" · ")) + "</p>"
       + found
       + '<ul class="rel" role="list">' + d.rels.map((r) => '<li><div class="rel-top"><span class="rel-kind ' + esc(r.kind) + '" aria-hidden="true"></span><strong>' + esc(r.other) + '</strong><span class="src ' + (r.src === "pub" ? "public" : DEMO ? "sample" : "yours") + '"><span class="sr-only">' + (r.src === "pub" ? "Public data" : SRC.records) + "</span></span></div>"
@@ -2104,8 +2119,8 @@
       + '<div class="side-actions">' + (guest ? '<a class="btn secondary sm" href="#/people/' + esc(C.personKey(guest)) + '">' + ic("arrowRight") + "Open profile</a>"
         + '<button type="button" class="btn ghost sm" data-open-tl="' + esc(C.personKey(guest)) + '">' + ic("clock") + "Past to present</button>" : "")
       + (d.callId ? '<a class="btn ' + (guest ? "ghost" : "secondary") + ' sm" href="#/calls/' + d.callId + '">' + (guest ? "" : ic("arrowRight")) + "Open the call</a>" : "")
-      + ((n.type === "prospect" || n.type === "past") && companyBySlug(slug(n.label)) ? '<a class="btn ghost sm" href="#/companies/' + slug(n.label) + '">Open company</a>' : "")
-      + (n.type === "person" ? '<a class="btn ghost sm" href="#/companies/' + slug(inviteById(n.callId).company) + '">Their company</a>' : "") + "</div>";
+      + ((n.type === "prospect" || n.type === "past") && !n.group && companyBySlug(slug(n.label)) ? '<a class="btn ghost sm" href="#/companies/' + slug(n.label) + '">Open company</a>' : "")
+      + (callOf && !callOf.noCompany ? '<a class="btn ghost sm" href="#/companies/' + slug(callOf.company) + '">Their company</a>' : "") + "</div>";
   }
   function renderMap() {
     const sec = $('[data-view="map"]');
@@ -2113,7 +2128,7 @@
     sec.innerHTML = '<div class="map-top"><span class="page-icon tag-teal" aria-hidden="true">' + ic("network") + '</span><h1 class="page-title" tabindex="-1">People map</h1>' + srcTag(SRC.records)
       + '<span class="grow"></span><div class="seg" role="group" aria-label="Show">' + views.map(([id, l]) => '<button type="button" data-mapview="' + esc(id) + '" aria-pressed="' + (app.mapView === id) + '">' + esc(l) + "</button>").join("") + "</div></div>"
       + '<div class="map-body"><div id="board" class="board" aria-label="Relationship map"></div><aside class="map-side" id="mapSide" aria-live="polite"></aside></div>';
-    if (!D.invites.length) {
+    if (!D.invites.length || !C.relationshipGraph().nodes.some((n) => n.type === "person")) { // calls with just you: nobody to map
       $("#board").innerHTML = '<div class="map-empty"><h2>No one to map yet</h2><p>' + (LIVE_MODE ? "The map fills in from the guests on your next 14 days of calls." : 'Connect your Google Calendar and the map fills in from the guests on your calls. <a href="#/home">Connect</a>') + "</p></div>";
       $("#mapSide").innerHTML = '<h2 tabindex="-1" id="mapSideH">How to read it</h2><div class="map-hint"><p>Each call\'s company, its people, and where they worked before, with the links between them.</p></div>';
       return;
@@ -2167,6 +2182,79 @@
     }
     if (app.view === "map") { $("#mapSide").innerHTML = mapSide(null); mountMap(); }
     announce(DEMO ? "Sample data: removed on this page only." : "Removed from the People map.");
+  }
+
+  // ---------- remove a call from Overture (never from Google Calendar) ----------
+  // POST /api/calls/hide keeps the list in your own records. The call leaves every page here at once (rail, Calls, Home, alerts,
+  // map), with Undo in a message; Restore on the Data page puts back one removed earlier (on a later visit the page loads again).
+  const taken = {}; // call id -> what left this page with it, so Undo puts it back without loading again
+  function dropCall(id) {
+    const at = D.invites.findIndex((i) => i.id === id);
+    if (at < 0) return null;
+    const inv = D.invites[at], mine = (x) => x.callId === id;
+    taken[id] = { inv, at, watch: D.watch.filter(mine), mentioned: D.mentioned.filter(mine), relationships: D.relationships.filter(mine) };
+    D.invites.splice(at, 1);
+    D.watch = D.watch.filter((x) => !mine(x));
+    D.mentioned = D.mentioned.filter((x) => !mine(x));
+    D.relationships = D.relationships.filter((x) => !mine(x));
+    D.hiddenCalls = (D.hiddenCalls || []).filter((x) => x.id !== id).concat([{ id, company: inv.company, title: inv.title, when: inv.when, start: inv.start, ended: !!inv.ended }]);
+    return inv;
+  }
+  function putBack(id) {
+    const t = taken[id];
+    delete taken[id];
+    D.hiddenCalls = (D.hiddenCalls || []).filter((x) => x.id !== id);
+    if (!t) return false;
+    D.invites.splice(Math.min(t.at, D.invites.length), 0, t.inv);
+    D.watch = D.watch.concat(t.watch);
+    D.mentioned = D.mentioned.concat(t.mentioned);
+    D.relationships = D.relationships.concat(t.relationships);
+    return true;
+  }
+  function afterCallsChange(goneId) {
+    if (goneId && app.liveCall === goneId) app.liveCall = D.invites.length ? D.invites[0].id : null;
+    if (goneId && app.mapView === goneId) app.mapView = "all";
+    if (goneId && app.view === "call" && app.callId === goneId) { go("#/calls"); return; } // its page is gone: back to Calls
+    renderNav();
+    if (app.view === "home") renderHome();
+    else if (app.view === "calls") renderCallsPage();
+    else if (app.view === "alerts") renderAlerts();
+    else if (app.view === "map") renderMap();
+    else if (app.view === "companies") renderCompanies();
+    else if (app.view === "data") renderData();
+  }
+  async function hideCall(id, hidden, kb) {
+    if (hidden) {
+      if (runningId === id) { toast("Wait for this call's brief to finish, then remove it."); return; }
+      const inv = dropCall(id);
+      if (!inv) return;
+      afterCallsChange(id);
+      if (!DEMO) {
+        try { await C.postJson("/api/calls/hide", { callId: id, hidden: true }, 15000); }
+        catch (e) { putBack(id); afterCallsChange(); toast("Not removed: " + e.message); return; }
+      }
+      toast("Removed " + callName(inv) + " from Overture" + (DEMO ? " (sample data, this page only)." : ". It stays on your Google Calendar."), "Undo", () => hideCall(id, false, kb));
+      if (kb) { const u = $("#toast [data-toast-act]"); if (u) u.focus(); }
+      return;
+    }
+    if (!DEMO) {
+      try { await C.postJson("/api/calls/hide", { callId: id, hidden: false }, 15000); }
+      catch (e) { afterCallsChange(); toast("Not restored: " + e.message); return; }
+    }
+    const inv = taken[id] && taken[id].inv;
+    if (!putBack(id)) { toast("Restored. Loading your calls again…"); location.reload(); return; } // removed on an earlier visit
+    afterCallsChange();
+    toast("Restored " + callName(inv) + " in Overture.");
+    const back = kb && $('#navWeek a[href="#/calls/' + CSS.escape(id) + '"]');
+    if (back) back.focus();
+  }
+  // Data page: the calls you removed, each with Restore.
+  function removedCallsHtml() {
+    const list = (D.hiddenCalls || []).slice().sort((a, b) => String(a.start).localeCompare(String(b.start)));
+    return '<section class="sec">' + secHead("Removed calls", "") + (list.length ? '<div class="list src-list">' + list.map((x) => '<div class="row"><span class="src-tile">' + ic("calendar") + "</span>"
+      + '<span class="src-text"><span class="row-title">' + esc(x.company) + '</span><span class="row-sub">' + esc(x.when + (x.title && x.title !== x.company ? " · " + x.title : "")) + "</span></span>"
+      + '<span class="src-act"><button type="button" class="btn secondary sm" data-restore-call="' + esc(x.id) + '" aria-label="' + esc("Restore " + callName(x) + " to Overture") + '">' + ic("rotate") + "Restore</button></span></div>").join("") + "</div>"
+      : '<p class="data-note">No removed calls. To take a call off Overture, use the trash button next to it. It stays on your Google Calendar.</p>') + "</section>";
   }
 
   // ---------- in-call panel page ----------
@@ -2291,6 +2379,7 @@
         + row("building", plural(recCount, "company", "companies"), "Status and notes you set on a company page, plus accepted after-call updates", "Overture records", LIVE_MODE)
         + row("bell", plural(D.watch.length, "alert"), "Job changes and first meetings, worked out from your past meetings", LIVE_MODE ? "Your calendar" : "Not connected", LIVE_MODE)
         + "</div></section>")
+      + (LIVE_MODE || DEMO ? removedCallsHtml() : "")
       + '<section class="sec">' + secHead("Who writes the brief", "") + '<div class="list src-list">'
       + row("listChecks", "Built-in rules", "Write every brief.", "In use", true)
       + row("sparkle", "Claude (Anthropic)", "Adds a short summary to each brief." + (C.state.claudeOn ? "" : " Set ANTHROPIC_API_KEY before starting server.py to turn it on."), C.state.claudeOn ? "On" : "Off", C.state.claudeOn)
@@ -2664,6 +2753,11 @@
       if (sk && app.view === "live") { app.liveSkin = sk.dataset.skin; renderLive(); $('[data-skin="' + app.liveSkin + '"]').focus(); return; }
       const tg = e.target.closest("[data-toast-go]");
       if (tg) { $("#toast").hidden = true; go(tg.dataset.toastGo); return; }
+      if (e.target.closest("[data-toast-act]")) { $("#toast").hidden = true; const f = toastAction; toastAction = null; if (f) f(); return; }
+      const hc = e.target.closest("[data-hide-call]");
+      if (hc) { hideCall(hc.dataset.hideCall, true, e.detail === 0); return; }
+      const rsc = e.target.closest("[data-restore-call]");
+      if (rsc && !rsc.disabled) { rsc.disabled = true; hideCall(rsc.dataset.restoreCall, false, e.detail === 0); return; }
       if (e.target.closest("[data-toast-close]")) { $("#toast").hidden = true; return; }
       if (e.target.closest("#openInCall")) { app.liveCall = app.callId; }
       const rc = e.target.closest("[data-rs-confirm]");
