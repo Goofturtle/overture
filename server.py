@@ -4309,7 +4309,7 @@ def mention_context(events, me, records, call_id, now=None, hs_contacts=None):
             if n not in met or met[n] < start:
                 met[n] = start
     att_names = {norm_name(a["name"]) for a in inv["attendees"]}
-    me_names = {norm_name(x) for x in ((me or {}).get("name", ""), "Chris") if x}
+    me_names = {norm_name(x) for x in ((me or {}).get("name", ""),) if x}
     known = {}
 
     def put(name, **info):
@@ -5317,7 +5317,7 @@ def connections_graph(records, call_ids, attendees=None):
     for c in (records.get("connections") or {}).values():
         if not isinstance(c, dict) or c.get("callId") not in call_ids:
             continue
-        frm = c.get("from") or "you"  # said by someone Overture couldn't name: you, as before
+        frm = c.get("from") or ""  # said by someone Overture couldn't name: no line (never a guess that it was you)
         if frm == NOBODY or (frm.startswith("p:") and attendees is not None and frm[2:] not in attendees):
             frm = ""  # about someone who isn't on the map: the company or person shows, with no line to anyone
         when = (" at " + c["time"]) if c.get("time") else ""
@@ -5915,11 +5915,12 @@ def _semantic_call(ctx):
     if not ctx:
         return {}
     inv = ctx.get("invite") or {}
-    bare = lambda n: str(n or "").split("@")[0]  # a guest named by their address (no name on the invite): never send the address
-    guests = [bare(a.get("name", "")) for a in inv.get("attendees") or [] if isinstance(a, dict) and a.get("name")]
-    own = ctx.get("company", "") if ctx.get("domain") else ""  # no company web address (personal email): the title is only a label
-    return {"title": clean_text(inv.get("title"), 160), "company": own,
-            "companies": [c for c in [own] + list(ctx.get("orgs") or {})[:150] if c],
+    bare = lambda n: "" if "@" in str(n or "") else str(n or "")  # a guest named by their address (no name on the invite): never sent
+    noaddr = lambda t: re.sub(r"\S+@\S+", "", str(t or "")).strip()  # nor an address in a title ("Call with x@y.com")
+    guests = [g for g in (bare(a.get("name", "")) for a in inv.get("attendees") or [] if isinstance(a, dict)) if g]
+    own = noaddr(ctx.get("company", "")) if ctx.get("domain") else ""  # no company web address (personal email): the title is only a label
+    return {"title": clean_text(noaddr(inv.get("title")), 160), "company": own,
+            "companies": [c for c in [own] + [noaddr(o) for o in list(ctx.get("orgs") or {})[:150]] if c],
             "people": [k.get("name", "") for k in (ctx.get("known") or [])[:100] if isinstance(k, dict) and k.get("name")],
             "skip": guests + sorted(ctx.get("me") or []),
             "participants": [{"id": "you", "name": "You"}]
@@ -5973,13 +5974,15 @@ def _save_ai_mentions(call_id, ctx, heard, source="captions"):
         if _codename_near(e["name"], text) or _codename_near(e["spoken"], text):
             continue
         brief = {"why": e["why"], "about": e["about"], "heardAs": e["heardAs"], "aiFound": True, "fromNode": _ai_node(e, ctx)}
-        if e["kind"] == "person" and e["company"]:
+        # Claude heard a mishearing but its spelling isn't a company Overture knows: the closest known one ("DKS" -> TKS). A company it
+        # kept as said stays ("Ravi from TCS" is TCS, even when TKS is known).
+        if e["heardAs"] and e["kind"] == "person" and e["company"]:
             e["company"], brief["companyHeard"] = _closest_org(e["company"], ctx)
-        elif e["kind"] == "company":
-            e["name"], heard_as = _closest_org(e["name"], ctx)
-            brief["heardAs"] = brief["heardAs"] or heard_as
+        elif e["heardAs"] and e["kind"] == "company":
+            e["name"], _was = _closest_org(e["name"], ctx)
         if brief["heardAs"] or brief.get("companyHeard"):
-            misheard.append((e["quote"].get("speaker", ""), e["quote"].get("time", ""), brief["heardAs"] or e["spoken"], brief.get("companyHeard", "")))
+            misheard.append({"kind": e["kind"], "speaker": e["quote"].get("speaker", ""), "time": e["quote"].get("time", ""),
+                             "words": brief["heardAs"] or e["spoken"], "co": brief.get("companyHeard", ""), "name": bool(brief["heardAs"])})
         brief = {k: v for k, v in brief.items() if v}
         if e["kind"] == "person":
             nn = norm_name(e["name"])
@@ -6008,13 +6011,16 @@ def _save_ai_mentions(call_id, ctx, heard, source="captions"):
         return
     drop = set()
     blk = (load_records().get("mentions") or {}).get(call_id) or {}
-    for speaker, time, words, co in misheard:  # e.g. the rules saved "Ravy" at "DKS" from the same caption
-        same = lambda it: not it.get("aiFound") and (it.get("quote") or {}).get("speaker", "") == speaker and (it.get("quote") or {}).get("time", "") == time
-        first = norm_name(words).split()[:1]
-        drop |= {it["key"] for it in blk.get("items") or [] if same(it) and first and norm_name(it.get("name", "")).split()[:1] == first}
-        drop |= {it["key"] for it in blk.get("orgs") or [] if same(it) and norm_org(it.get("name", "")) in {norm_org(words), norm_org(co)} - {""}}
+    for m in misheard:  # e.g. the rules saved "Ravy" at "DKS" from the same caption
+        same = lambda it: not it.get("aiFound") and (it.get("quote") or {}).get("speaker", "") == m["speaker"] and (it.get("quote") or {}).get("time", "") == m["time"]
+        if m["kind"] == "person":  # that person as heard; when only their company was misheard, only the one named with it
+            first = norm_name(m["words"]).split()[:1]
+            drop |= {it["key"] for it in blk.get("items") or [] if same(it) and first and norm_name(it.get("name", "")).split()[:1] == first
+                     and (m["name"] or str(it.get("role") or "").lower() == "at " + m["co"].lower())}
+        heard_orgs = {norm_org(m["words"]) if m["kind"] == "company" else "", norm_org(m["co"])} - {""}
+        drop |= {it["key"] for it in blk.get("orgs") or [] if same(it) and norm_org(it.get("name", "")) in heard_orgs}
     try:
-        block, new, go, wait, new_o, unqueue = save_mentions(call_id, ctx, people, source, orgs, bump=False, drop=frozenset(drop))
+        block, new, go, wait, new_o, unqueue = save_mentions(call_id, ctx, people, source, orgs, bump=False, supersede=frozenset(drop))
     except Invalid:
         return
     _unqueue(unqueue)
@@ -6282,9 +6288,10 @@ ME_WORDS = {"i", "i'm", "im", "i've", "ive", "i'd", "i'll", "my", "me", "mine", 
 YOU_WORDS = {"you", "your", "yours", "yourself", "you're", "youre", "you've", "youve", "you'd", "you'll", "youll", "ur"}
 THEM_WORDS = {"he", "he's", "his", "him", "she", "she's", "her", "hers", "they", "they're", "they've", "their", "theirs", "them",
               "brother", "sister", "friend", "wife", "husband", "dad", "mom", "father", "mother", "son", "daughter", "cousin", "uncle",
-              "aunt", "roommate", "girlfriend", "boyfriend"}
+              "aunt", "roommate", "girlfriend", "boyfriend", "parent", "kid", "family", "boss", "manager", "coworker", "colleague",
+              "fiance", "fiancee", "grandma", "grandpa", "grandmother", "grandfather"}
 POSSESSIVE = {"my", "our", "your", "yours", "ur", "his", "her", "their"}
-YOU_FILLER = re.compile(r"\b(?:you know|you see|you mean|thank you|see you|mind you)\b", re.I)
+YOU_FILLER = re.compile(r"\b(?:you know|you see|you mean|thank you|see you|mind you)(?![\w'])", re.I)
 NOBODY = "-"  # about someone who isn't on the call ("my brother", "they"): the company shows on the map with no line to anyone
 
 
@@ -6324,21 +6331,31 @@ def _guest_named(word, guests):
 
 def _from_node(speaker, ctx):
     """Who said it, as a map node: "you" for you and your notes, "p:<email>" for a guest, "" when Overture can't tell."""
-    if not speaker or _is_me(speaker, ctx) or norm_name(speaker) in SELF_SPEAKERS:
+    if not speaker:  # Meetily, Granola's other side and pasted transcripts don't name who's talking: unknown, never a guess of you
+        return ""
+    if _is_me(speaker, ctx) or norm_name(speaker) in SELF_SPEAKERS:
         return "you"
     a = _guest(speaker, ctx)
     return "p:" + a["email"] if a else ""
 
 
-def _about_node(quote, ctx, name="", near=0):
+def _about_node(quote, ctx, name="", near=0, source=""):
     """Who a mention is about, as a map node, from the closest word to it in its sentence: "I/we/my" is whoever said it, "you/your"
     the person they're talking to ("I hear you're an intern at Microsoft" said by you: the guest), a guest's name that guest,
     "he/they/my brother" someone not on the call (NOBODY). No such word: whoever said it. near: a person's name looks only that many
-    words back, at "my/your/his" ("your manager Ravi" is the guest's; "you should meet Ravi" is just said by you)."""
+    words back, at "my/your/his" ("your manager Ravi" is the guest's; "you should meet Ravi" is just said by you). source: a line with
+    no speaker in your own notes is yours."""
     q = quote if isinstance(quote, dict) else {}
-    said_by = _from_node(q.get("speaker") or "", ctx)
+    said_by = _from_node(q.get("speaker") or ("You" if source in ("notes", "live") else ""), ctx)
     text, name = str(q.get("text") or "").replace("\u2019", "'"), str(name or "").replace("\u2019", "'")
-    at = text.lower().find(name.lower()) if name else -1
+    at = -1
+    for cand in ([name, name.split()[0]] if name.strip() else []):  # as a whole word ("Port" isn't in "support"), else its first word
+        m = re.search(r"(?<![\w'])" + re.escape(cand.lower()) + r"(?!\w)", text.lower())
+        if m:
+            at, name = m.start(), cand
+            break
+    if name.strip() and at < 0:
+        return said_by  # saved under another spelling than was said: who said it, not a guess from the whole sentence
     before, after = (text[:at], text[at + len(name):]) if at >= 0 else (text, "")
     before, after = re.split(r"[.!?;:]\s", before)[-1], re.split(r"[.!?;:](?:\s|$)", after)[0]
     words = lambda s: [w for w in re.findall(r"[A-Za-z][A-Za-z']*", YOU_FILLER.sub(" ", s)) if w != "US"]
@@ -6346,6 +6363,8 @@ def _about_node(quote, ctx, name="", near=0):
     guests = _guests(ctx)
     for w in look:
         low = w.lower()
+        base = re.sub(r"'s$", "", low)  # "my dad's", "Shlok's"
+        base = base[:-1] if base.endswith("s") and base[:-1] in THEM_WORDS else base  # "my parents", "my friends"
         if near and low not in POSSESSIVE:
             continue
         if low in ME_WORDS:
@@ -6354,12 +6373,12 @@ def _about_node(quote, ctx, name="", near=0):
             if said_by == "you":
                 return "p:" + guests[0]["email"] if len(guests) == 1 else NOBODY
             return "you" if said_by and len(guests) == 1 else NOBODY
-        if low in THEM_WORDS:
+        if low in THEM_WORDS or base in THEM_WORDS:
             return NOBODY
-        if w[0].isupper() and len(low) >= 3:
-            if low in ctx.get("meFirst", ()):
+        if w[0].isupper() and len(base) >= 3:
+            if base in ctx.get("meFirst", ()):
                 return "you"
-            g = _guest_named(low, guests)
+            g = _guest_named(base, guests)
             if g:
                 return "p:" + g["email"]
     return said_by
@@ -6368,7 +6387,7 @@ def _about_node(quote, ctx, name="", near=0):
 def place_mentions(records, invites, me):
     """Mentions saved before FROM_V get their map line placed again, once each: on the person they're about, with Meet's name for a
     guest matched to the calendar's. Returns the records to show (the saved ones when anything moved)."""
-    me_names = {norm_name(x) for x in ((me or {}).get("name", ""), "Chris") if x}
+    me_names = {norm_name(x) for x in ((me or {}).get("name", ""),) if x}
     ctxs = {i["id"]: {"invite": i, "me": me_names, "meFirst": {n.split()[0] for n in me_names if n}} for i in invites}
 
     def place(r, write):
@@ -6381,7 +6400,7 @@ def place_mentions(records, invites, me):
                 + [(it, 0) for it in b.get("orgs") or [] if isinstance(it, dict) and it.get("fromV") != FROM_V]
             if todo and write:
                 for it, near in todo:
-                    it.update(fromNode=_about_node(it.get("quote"), ctx, it.get("heardAs") or it.get("name") or it.get("role") or "", near), fromV=FROM_V)
+                    it.update(fromNode=_about_node(it.get("quote"), ctx, it.get("heardAs") or it.get("name") or it.get("role") or "", near, it.get("source") or ""), fromV=FROM_V)
                 sync_connections(r, cid)
             moved = moved or bool(todo)
         return moved
@@ -6469,12 +6488,13 @@ def _unqueue(keys):
             RQ["mentions"].pop(k, None)
 
 
-def save_mentions(call_id, ctx, found, source, orgs=None, bump=True, now=None, drop=frozenset(), auto=None):
+def save_mentions(call_id, ctx, found, source, orgs=None, bump=True, now=None, drop=frozenset(), auto=None, supersede=frozenset()):
     """Merge newly found mentions (people and companies) into the call's saved list (only the mention and its sentence; never the
     transcript) and update the call's connections. drop: keys a live note said before and no longer says ("John Sm" before
     "John Smith"); they are taken back unless you acted on them. Returns (block, new people, companies to look up now, companies
     waiting, new companies, queued lookups that aren't needed any more). auto (default: the source is notes as you type or
-    Meetily) follows Settings > Mentions > automatic look-up; web research off stops every lookup."""
+    Meetily) follows Settings > Mentions > automatic look-up; web research off stops every lookup. supersede: the word rules' copies the
+    live pass corrected ("Ravy at DKS" for Ravi at TKS): taken back like drop, and never added again when the captions are read again."""
     t = _time.time() if now is None else now
     auto = source in AUTO_SOURCES if auto is None else auto
     with RECORDS_LOCK:
@@ -6484,6 +6504,9 @@ def save_mentions(call_id, ctx, found, source, orgs=None, bump=True, now=None, d
         block.update(company=ctx["company"], domain=ctx["domain"], title=clean_text((ctx.get("invite") or {}).get("title"), 200))
         block.setdefault("orgs", [])
         unqueue = []
+        sup = block.setdefault("superseded", {}) if supersede else block.get("superseded") or {}
+        sup.update(dict.fromkeys(supersede, now_iso()))
+        drop = drop | supersede
         if drop:
             gone_p = {it["id"] for it in block["items"] if it.get("key") in drop and _untouched(it)}
             gone_o = {it["id"] for it in block["orgs"] if it.get("key") in drop and not it.get("removed")}
@@ -6493,15 +6516,18 @@ def save_mentions(call_id, ctx, found, source, orgs=None, bump=True, now=None, d
         have = {it.get("key"): it for it in block["items"]}
         new = []
         blocker = lookup_blocker(block, auto, r)
+        spell = source not in ("notes", "live") and not (claude_on() and live_ai_on(r))  # heard, not typed; and the live pass isn't checking
         for f in found:
-            if str(f.get("role") or "").startswith("at ") and not f.get("companyHeard"):  # "Ravy from DKS" when Overture only knows TKS
+            if f["key"] in sup and not f.get("aiFound"):
+                continue  # the live pass corrected this copy: reading the captions again doesn't bring it back
+            if spell and not f.get("aiFound") and str(f.get("role") or "").startswith("at ") and not f.get("companyHeard"):  # "Ravy from DKS", only TKS known
                 co, was = _closest_org(f["role"][3:], ctx)
                 f = dict(f, role="at " + co, companyHeard=was) if was else f
             old = have.get(f["key"])
             if old:
                 old.update({k: f[k] for k in ("why", "about", "heardAs", "companyHeard") if f.get(k) and not old.get(k)})
-                if f.get("fromNode"):  # the live pass read the conversation: who it belongs with beats the word rules
-                    old.update(fromNode=f["fromNode"], fromV=FROM_V)
+                if f.get("fromNode") and not old.get("fromAI"):  # the live pass read the conversation: it beats the word rules (its first reading stays)
+                    old.update(fromNode=f["fromNode"], fromV=FROM_V, fromAI=True)
                 if bump:
                     old["count"] = int(old.get("count") or 1) + f["count"]
                 if f.get("said") and not old.get("said"):
@@ -6513,8 +6539,8 @@ def save_mentions(call_id, ctx, found, source, orgs=None, bump=True, now=None, d
                   "role": f["role"], "kind": f["kind"], "count": f["count"], "quote": f["quote"], "source": source, "at": now_iso(),
                   "person": None, "candidates": [], "note": "", "confirmed": False, "added": False, "hubspot": "",
                   "said": f.get("said") or None, "autoFound": False, "fromV": FROM_V,
-                  "fromNode": f.get("fromNode") or _about_node(f["quote"], ctx, f.get("heardAs") or f["name"] or f.get("role") or "", 3),
-                  **{k: f[k] for k in ("why", "about", "heardAs", "companyHeard", "aiFound") if f.get(k)}}
+                  "fromNode": f.get("fromNode") or _about_node(f["quote"], ctx, f.get("heardAs") or f["name"] or f.get("role") or "", 3, source),
+                  **{k: f[k] for k in ("why", "about", "heardAs", "companyHeard", "aiFound") if f.get(k)}, **({"fromAI": True} if f.get("fromNode") else {})}
             scope = person_mention_scope(block, it, r)
             if it.get("role", "").startswith("at "):
                 it.update(mentionedCompany=scope["company"], mentionedDomain=scope["domain"])
@@ -6535,11 +6561,13 @@ def save_mentions(call_id, ctx, found, source, orgs=None, bump=True, now=None, d
         have_o = {it.get("key"): it for it in block["orgs"]}
         go, wait, new_o = [], [], []
         for o in orgs or []:
+            if o["key"] in sup and not o.get("aiFound"):
+                continue
             rel, old = o.get("relation"), have_o.get(o["key"])
             if old:
                 old.update({k: o[k] for k in ("why", "about", "heardAs") if o.get(k) and not old.get(k)})
-                if o.get("fromNode"):
-                    old.update(fromNode=o["fromNode"], fromV=FROM_V)
+                if o.get("fromNode") and not old.get("fromAI"):
+                    old.update(fromNode=o["fromNode"], fromV=FROM_V, fromAI=True)
                 if o.get("aiFound"):
                     continue  # the AI pass adds its brief; the rules' wait for an explanation stays as it is
                 if bump:
@@ -6559,7 +6587,8 @@ def save_mentions(call_id, ctx, found, source, orgs=None, bump=True, now=None, d
                 break
             it = {"id": hashlib.sha256((call_id + "|" + o["key"]).encode("utf-8")).hexdigest()[:12], "key": o["key"], "name": o["name"],
                   "domain": o.get("domain") or "", "kind": "company", "count": o["count"], "quote": o["quote"], "source": source, "at": now_iso(),
-                  "fromNode": o.get("fromNode") or _about_node(o["quote"], ctx, o.get("heardAs") or o["name"]), "fromV": FROM_V, "relation": None, "note": "", "removed": False, "waitUntil": 0,
+                  "fromNode": o.get("fromNode") or _about_node(o["quote"], ctx, o.get("heardAs") or o["name"], 0, source), "fromV": FROM_V,
+                  **({"fromAI": True} if o.get("fromNode") else {}), "relation": None, "note": "", "removed": False, "waitUntil": 0,
                   **{k: o[k] for k in ("why", "about", "heardAs", "aiFound") if o.get(k)}}
             if rel:
                 it.update(status="said", relation=rel)  # the call explained it: no web lookup
