@@ -114,19 +114,25 @@
     + '" title="' + esc("Delete " + callName(inv)) + '"' + (style ? ' style="' + esc(style) + '"' : "") + ">" + ic("trash") + "</button>";
 
   // ---------- toast (only for "brief ready" while you are elsewhere, and Undo after removing a call) ----------
-  let toastTimer = null, toastAction = null;
-  // href: a page to open, or a function to run (Undo).
+  let toastTimer = null, toastAction = null, toastMs = 5000;
+  const toastArm = () => { clearTimeout(toastTimer); toastTimer = setTimeout(() => { $("#toast").hidden = true; }, toastMs); };
+  // href: a page to open, or a function to run (Undo). A message with a button stays 10 seconds; pointing at it or focusing it
+  // keeps it up until you leave it.
   function toast(text, actionLabel, href) {
     const el = $("#toast");
     toastAction = typeof href === "function" ? href : null;
     el.innerHTML = '<span class="toast-text">' + esc(text) + "</span>" + (actionLabel ? '<button type="button" class="btn secondary sm" ' + (toastAction ? "data-toast-act" : 'data-toast-go="' + esc(href) + '"') + ">" + esc(actionLabel) + "</button>" : "")
       + '<button type="button" class="x" data-toast-close aria-label="Dismiss">' + ic("x") + "</button>";
     el.hidden = false;
-    clearTimeout(toastTimer);
-    const arm = () => { toastTimer = setTimeout(() => { el.hidden = true; }, 5000); };
-    el.onmouseenter = el.onfocusin = () => clearTimeout(toastTimer);
-    el.onmouseleave = el.onfocusout = arm;
-    arm();
+    if (!el.dataset.wired) { // focusin/focusout bubble up from its buttons (there is no onfocusin property)
+      el.dataset.wired = "1";
+      el.addEventListener("mouseenter", () => clearTimeout(toastTimer));
+      el.addEventListener("mouseleave", () => { if (!el.contains(document.activeElement)) toastArm(); });
+      el.addEventListener("focusin", () => clearTimeout(toastTimer));
+      el.addEventListener("focusout", (e) => { if (!el.contains(e.relatedTarget)) toastArm(); });
+    }
+    toastMs = actionLabel ? 10000 : 5000;
+    toastArm();
   }
 
   // ---------- rail ----------
@@ -2110,7 +2116,7 @@
   function mapSide(d) {
     if (!d) {
       return '<h2 tabindex="-1" id="mapSideH">How to read it</h2><div class="map-hint"><p>Click a person or company to see every link. Double-click a person to see their past to present. Click a label on a line to see why it exists. Drag cards to move them; scroll or use the zoom bar to move around.</p></div>'
-        + '<h3 class="sub-label">What the agent noticed</h3>' + insights().map((t) => '<p class="map-insight">' + esc(t) + "</p>").join("");
+        + (insights().length ? '<h3 class="sub-label">What the agent noticed</h3>' + insights().map((t) => '<p class="map-insight">' + esc(t) + "</p>").join("") : "");
     }
     const n = d.node;
     const kindWord = { warm: "Warm link", moved: "Past job or talk", together: "Worked together", works: "Works there", mentioned: "Mentioned on a call", personal: "Personal email" };

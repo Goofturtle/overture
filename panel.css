@@ -233,3 +233,47 @@ body { font-size: 14px; background: var(--surface); }
 @media (prefers-reduced-motion: reduce) {
   :root[data-theme="dark"] :is(.p-tabs [role="tab"], .p-points label, .p-person-btn) { transition: none; }
 }
+
+/* ---------- a mentioned person's card (panel.js mentionView): opens by itself when their lookup finishes ----------
+   A guest profile's parts (.pp, .pp-head, .pf-lead, .pf-list, .pf-srcs in profile.css) with a bigger face, a clear Back button
+   (a 32px .btn), a likely match said first (the live feed's amber edge), and one soft flash when it opened by itself.
+   profile.css loads after this file, so the overrides of its .pp rules carry both classes. */
+.pp.p-mnv { gap: 12px; }
+.p-mnv-back { align-self: flex-start; }
+.p-mnv-warn { border-left: 3px solid #d69535; }
+.p-mnv-warn strong { font-weight: 600; }
+.pp-head.p-mnv-head { grid-template-columns: 64px minmax(0, 1fr); gap: 12px; margin: 0 -8px; padding: 8px; border-radius: var(--r-lg); }
+.p-mnv-head .pp-name { font-size: 18px; line-height: 1.35; }
+.p-mnv-head .pp-sub { font-size: 13px; color: var(--ink-2); }
+.p-mnv-head .pp-pills { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.p-mnv-ai { font-size: 13px; line-height: 1.5; color: var(--ink-2); }
+.p-mnv .la-ai { font-size: 12px; color: var(--muted); }
+.p-mnv .pf-list > li { color: var(--ink-2); }
+.p-mnv .p-label { margin-bottom: -4px; }
+.p-mnv .pf-src-t { font-size: 13px; }
+.p-mnv .p-mn-acts { gap: 8px; }
+.p-mnv .pp-open { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.p-mn-open { color: inherit; font-weight: inherit; text-align: left; }
+.p-flash { animation: p-flash 2.4s var(--ease); }
+@keyframes p-flash { 0%, 30% { background: var(--accent-bg); } }
+
+/* The pill at the bottom: research that finished while you typed. Inverted (ink on the page colour) so it reads at a glance
+   in either theme; the panel gets room under its last line while it shows. */
+.p-ready {
+  position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 5; display: flex; align-items: center; gap: 2px; width: fit-content; max-width: 456px;
+  margin: 0 auto; padding: 3px; border-radius: var(--r-full); background: var(--ink); color: var(--bg); box-shadow: var(--shadow-pop);
+}
+.p-ready button {
+  display: inline-flex; align-items: center; gap: 8px; min-width: 0; height: 34px; border: 0; border-radius: var(--r-full);
+  background: none; color: inherit; font-size: 13px; font-weight: 600; line-height: 1.45; cursor: pointer;
+}
+.p-ready button:hover { background: color-mix(in srgb, var(--bg) 16%, transparent); }
+.p-ready button:focus-visible { outline: 2px solid var(--bg); outline-offset: -4px; border-radius: var(--r-full); }
+.p-ready-open { flex: 0 1 auto; padding: 0 10px 0 5px; }
+.p-ready-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p-ready-more { flex: none; font-weight: 500; opacity: 0.75; }
+.p-ready-x { flex: none; justify-content: center; width: 34px; padding: 0; }
+.p-has-ready #app { padding-bottom: 72px; }
+@keyframes p-ready-in { from { opacity: 0; transform: translateY(8px); } }
+@media (prefers-reduced-motion: no-preference) { .p-ready { animation: p-ready-in 200ms var(--ease); } }
+@media (prefers-reduced-motion: reduce) { .p-flash { animation: none; } }

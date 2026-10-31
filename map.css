@@ -315,3 +315,4 @@
 
 /* Each person's lines have their own colour (map.js OWNER_COLORS); their avatar wears it as a ring. */
 .node.person.owned .avatar { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--owner); }
+.board-empty { margin: 0; padding: 32px 16px; text-align: center; color: var(--muted); line-height: 1.5; }

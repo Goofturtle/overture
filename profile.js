@@ -31,7 +31,8 @@
     const att = calls.length ? calls[0].attendees.find((a) => a.email === email) : null;
     const name = (att && att.name) || (info.profile && info.profile.name) || r.nameUsed || "Guest";
     const title = rec.title && rec.title !== "Title unknown" ? rec.title : r.title || "";
-    const company = calls.length ? calls[0].company : (r.local && r.local.company) || "";
+    const coCall = calls.find((c) => !c.noCompany); // a personal-email call's title is only a label, never their company
+    const company = coCall ? coCall.company : (r.local && r.local.company) || "";
     const org = company ? C.orgInfo(company) : null;
     return { email, info, name, title, company, org, companyLabel: org && org.profile && org.profile.name ? org.profile.name : company, calls };
   }

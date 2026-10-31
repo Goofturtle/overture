@@ -126,7 +126,8 @@ def _status(raw):
     if status in ("error", "nokey"):
         return "error"
     if status == "notfound":
-        return "needs_company" if "company website" in str(raw.get("note", "")) else "no_match"
+        # no lookup ran for want of a company ("no company website", or a call with "no company web address"): not a failed search
+        return "needs_company" if any(w in str(raw.get("note", "")) for w in ("company website", "company web address")) else "no_match"
     if status == "pick":
         return "possible"
     if status in ("found", "known", "said"):
@@ -308,7 +309,7 @@ def clean_entities(payload, utterances, call=None):
         seen.add(key)
         out.append({"kind": value["kind"], "name": name, "spoken": spoken, "heardAs": spoken if spoken.casefold() != name.casefold() else "",
                     "company": clean(value.get("company"), 120) if value["kind"] == "person" else "", "role": clean(value.get("role"), 80),
-                    "linkedTo": clean(value.get("linkedTo"), 12) if clean(value.get("linkedTo"), 12) in ids else "",
+                    "linkedTo": clean(value.get("linkedTo"), 12).lower() if clean(value.get("linkedTo"), 12).lower() in ids else "",  # "G1" is g1
                     "why": clean(value.get("why"), 240), "about": clean(value.get("about"), 240), "importance": min(3, importance), "utteranceId": str(utterance["id"]),
                     "quote": {"text": _sentence_with(utterance.get("text"), spoken), "speaker": clean(utterance.get("speaker"), 80), "time": clean(utterance.get("time"), 12)}})
     return out

@@ -38,7 +38,8 @@
     // A company (or the "Personal email" group) can hold several calls: take the one with this call, and only this call's people.
     const onCall = (n) => (n.calls || [n.callId]).includes(callId);
     const co = graph.nodes.find((n) => n.type === "prospect" && onCall(n));
-    const people = co ? graph.nodes.filter((n) => n.type === "person" && n.company === co.id && onCall(n)) : [];
+    // everyone on this call, also a guest whose one card sits in another call's frame
+    const people = co ? graph.nodes.filter((n) => n.type === "person" && (n.calls ? n.calls.includes(callId) : n.company === co.id && n.callId === callId)) : [];
     if (!people.length) return { pos, frames: [], keep: new Set() }; // just you on this call: nobody to draw
     const keep = new Set(people.map((p) => p.id));
     const xA = S.person[0] / 2, xB = S.person[0] + F.colGap;
@@ -194,6 +195,10 @@
     S = opts.compact ? SIZE_C : SIZE;
     F = opts.compact ? FRAME_C : FRAME;
     const lay = opts.mode === "stack" ? stackLayout(graph, opts.callId) : boardLayout(graph);
+    if (opts.mode === "stack" && !lay.frames.length) { // just you on this call: a line of text, not an empty board
+      root.innerHTML = '<p class="board-empty">Nobody else on this call to map yet.</p>';
+      return { fit() {}, select() {}, destroy() { root.innerHTML = ""; }, details() { return null; } };
+    }
     let selected = null;
     // Motion state: what the last render showed, which card the pointer or keyboard is on.
     let shownSel = null, firstRender = true, hoverId = null, ptrHover = null, keyHover = null, easeT = 0;

@@ -622,7 +622,7 @@ def fetch_events(now=None):
     base = {
         "timeMin": (now - timedelta(days=DAYS_BACK)).isoformat(), "timeMax": (now + timedelta(days=DAYS_AHEAD)).isoformat(),
         "singleEvents": "true", "orderBy": "startTime", "maxResults": "2500",
-        "fields": "items(id,status,summary,description,start,end,attendees,hangoutLink,conferenceData(conferenceId,conferenceSolution/key/type)),nextPageToken",
+        "fields": "items(id,status,summary,description,location,start,end,attendees,creator(email,displayName),organizer(email,displayName),hangoutLink,conferenceData(conferenceId,conferenceSolution/key/type)),nextPageToken",
     }
     events, page = [], None
     for _ in range(4):
@@ -851,13 +851,17 @@ def mailbox(email):
     return re.sub(r"\d+$", "", str(email or "").split("@")[0].split("+")[0].strip().lower())
 
 
+_flat = lambda s: re.sub(r"[._-]", "", s)  # no.reply, do-not-reply and noreply are one mailbox
+
+
 def system_box(email):
-    return mailbox(email) in SYSTEM_BOXES
+    m = _flat(mailbox(email))
+    return m in {_flat(x) for x in SYSTEM_BOXES} or m.startswith(("noreply", "donotreply"))
 
 
 def role_box(email):
     """A shared or system mailbox (admin@, info@, noreply@): shown on no page as a person."""
-    return mailbox(email) in ROLE_BOXES or system_box(email)
+    return _flat(mailbox(email)) in {_flat(x) for x in ROLE_BOXES} or system_box(email)
 
 
 def name_key(name):
@@ -867,12 +871,14 @@ def name_key(name):
 
 def merge_guests(people):
     """One entry per person on a call: the same address twice, or the same name on two addresses (work and personal email).
-    A name only merges when it is a full name or a long run-together one, so two guests both called 'Sam' stay two people.
+    A name only merges across one personal and one work address, and when it is a full name or a long run-together one, so two
+    guests both called 'Sam', or two David Lees at two companies, stay two people.
     The work address is kept (it names the company), with the fuller of the two names."""
     out = []
     for p in people:
         k = name_key(p["name"])
         same = next((q for q in out if q["email"] == p["email"] or (k and k == name_key(q["name"])
+                     and personal_domain(domain_of(q["email"])) != personal_domain(domain_of(p["email"]))
                      and (" " in norm_name(p["name"]) or " " in norm_name(q["name"]) or len(k) >= 8))), None)
         if not same:
             out.append(dict(p))
@@ -932,12 +938,15 @@ def event_to_invite(ev, me_email, records):
     if not start:
         return None
     guests = _others(ev, me_email)  # none: an event with just you (a test call, or guests not invited yet) still shows
-    people = merge_guests([g for g in guests if not role_box(g["email"])])  # shared mailboxes (admin@, info@) aren't people
+    names = {str(a.get("email", "")).strip().lower(): norm_name(a.get("displayName") or "") for a in ev.get("attendees") or [] if isinstance(a, dict)}
+    shared = lambda g: system_box(g["email"]) or (role_box(g["email"]) and (len(names.get(g["email"].lower(), "").split()) < 2
+                                                                         or mailbox(g["email"]) in names.get(g["email"].lower(), "").split()))
+    people = merge_guests([g for g in guests if not shared(g)])  # shared mailboxes (admin@, info@) aren't people, unless named
     mine = domain_of(me_email)
     if guests and mine and not personal_domain(mine) and all(domain_of(p["email"]) == mine for p in guests):
         return None  # internal meeting: only your own colleagues
     counts = {}
-    for group in (people, [g for g in guests if role_box(g["email"])]):  # a shared mailbox (sales@) names the company only when no person does
+    for group in (people, [g for g in guests if shared(g)]):  # a shared mailbox (sales@) names the company only when no person does
         for p in group:
             d = domain_of(p["email"])
             if d and not personal_domain(d) and d != mine:
@@ -1090,7 +1099,8 @@ def upcoming_invites(events, me_email, records, now, removed=None):
         seen_ids.add(inv["id"])
     hidden = hidden_calls(records)  # after the ids are made unique, so removing one call never renames another
     if removed is not None:
-        removed.extend({k: inv[k] for k in ("id", "title", "company", "when", "start", "ended")} for inv in invites if inv["id"] in hidden)
+        # with its end, Meet code and Zoom id, so the in-call panel never matches a deleted call's meeting to another occurrence
+        removed.extend({k: inv.get(k) for k in ("id", "title", "company", "when", "start", "end", "ended", "meetingCode", "zoomId")} for inv in invites if inv["id"] in hidden)
     return [inv for inv in invites if inv["id"] not in hidden]
 
 

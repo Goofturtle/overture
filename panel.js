@@ -6,6 +6,7 @@
 (function () {
   "use strict";
   const { D, $, $$, esc, ic, plural, splitWhen, fmtDate, store, tenure, avatar, tagFor, coTile } = window.C;
+  if (!window.C.ICONS.arrowLeft) window.C.ICONS.arrowLeft = '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>'; // Lucide arrow-left: "Back to notes"
   const LA = window.OvertureLiveAssist;
   const CFG = window.CENTRALIZE_CONFIG || {};
   const qs = new URLSearchParams(location.search);
@@ -36,7 +37,10 @@
     const meet = codeKey(qs.get("meet")), zoom = String(qs.get("zoom") || "").replace(/\D/g, "");
     // a recurring meeting reuses its code: take the occurrence closest to now (today's, even once it runs late)
     const nearest = (list) => list.sort((a, b) => Math.abs(Date.parse(a.start) - Date.now()) - Math.abs(Date.parse(b.start) - Date.now()))[0] || null;
-    const byCode = meet ? nearest(D.invites.filter((i) => codeKey(i.meetingCode) === meet)) : zoom ? nearest(D.invites.filter((i) => String(i.zoomId || "") === zoom)) : null;
+    // Deleted calls (Settings > Deleted meetings) count too, so a deleted occurrence never hands its captions to last or next week's.
+    const all = D.invites.concat((D.hiddenCalls || []).map((h) => Object.assign({ deleted: true }, h)));
+    const byCode = meet ? nearest(all.filter((i) => codeKey(i.meetingCode) === meet)) : zoom ? nearest(all.filter((i) => String(i.zoomId || "") === zoom)) : null;
+    if (byCode && byCode.deleted) { state.deletedMatch = byCode.company || "this call"; return null; }
     if (byCode || (!meet && !zoom)) return byCode;
     // A meeting link that isn't on the event (pasted in chat, a new room): the one call on your calendar happening now,
     // from 15 minutes before it starts until 90 minutes after its end (calls run over).
@@ -65,6 +69,7 @@
     if (m) state.callId = state.captionsCall = m.id; // captions are only read for a call this meeting matched, or one you pick
     state.hostNote = m ? (state.matchedByTime ? "This meeting's link isn't on your calendar, so Overture matched it to the call happening now: " + m.company + ". Wrong call? Pick it below."
       : "Matched this " + HOST_NAME + " call to " + m.company + ".")
+      : state.deletedMatch ? "You deleted " + state.deletedMatch + " from Overture, so its captions aren't read. Restore it in Settings › Deleted meetings, or pick a call below."
       : (qs.get("meet") || qs.get("zoom")) ? "Pick the call below. This meeting isn't on your calendar." : "Open a Google Meet or Zoom web call in this tab, or pick a call below.";
   }
   const announce = (t) => { const el = $("#announce"); el.textContent = ""; setTimeout(() => { el.textContent = t; }, 50); };
@@ -216,9 +221,9 @@
     card.points = h;
     h = "";
     const glance = sec("At a glance", "", '<dl class="p-props">'
-      + "<dt>Company</dt><dd>" + (orgP || window.C.orgInfo(ctx.invite.company).status
+      + (ctx.invite.noCompany ? "" : "<dt>Company</dt><dd>" + (orgP || window.C.orgInfo(ctx.invite.company).status // personal email: the title isn't a company
         ? '<button type="button" class="link-btn pp-org-link" data-pp-org="' + esc(ctx.invite.company) + '">' + esc(orgP && orgP.name ? orgP.name : ctx.invite.company) + "</button>"
-        : esc(ctx.invite.company)) + (c ? ' <span class="pill ' + tagFor("status", c.status) + '">' + esc(c.status) + "</span>" : "") + "</dd>"
+        : esc(ctx.invite.company)) + (c ? ' <span class="pill ' + tagFor("status", c.status) + '">' + esc(c.status) + "</span>" : "") + "</dd>")
       + (top.score > 0 ? '<dt>Best fit</dt><dd><span class="pill accent">' + esc(top.name) + "</span></dd>" : "")
       + (last ? "<dt>Last talk</dt><dd>" + esc(fmtDate(last.date) + ": " + last.text) + "</dd>" : "")
       + (b ? "<dt>Backstage</dt><dd>" + esc(b.from + " · " + plural(b.behind, "release") + " behind · " + plural(b.serious, "serious notice")) + "</dd>" : "")
@@ -303,7 +308,7 @@
       if (j.callId !== id) throw new Error("Overture returned a different call. Reload the panel.");
       const expectedAccount = String(window.C.accountEmail || (D.me && D.me.email) || "").trim().toLowerCase();
       if (j.accountEmail && String(j.accountEmail).toLowerCase() !== expectedAccount) throw new Error("Your signed-in account changed. Reload the panel.");
-      if (id === state.callId && epoch === state.streamEpoch) applyAssist(id, j.assist, epoch);
+      if (id === state.callId && epoch === state.streamEpoch) { applyAssist(id, j.assist, epoch); mnBehind(id); }
     } catch (e) {
       if (id === state.callId && epoch === state.streamEpoch) { assist.error = e.message || "Cannot reach Overture on this PC."; refreshAssist(); refreshListen(); }
     }
@@ -340,16 +345,20 @@
     Object.assign(mn, { callId: id, items: j.items || [], orgs: j.orgs || [] });
     const graph = window.C.mergeConnections(id, j.graph);
     if (graph && mnBus) mnBus.postMessage({ callId: id });
-    if (graph || before !== JSON.stringify([mn.callId, mn.items, mn.orgs])) refreshMentions();
+    const opened = mnFinished(id); // a lookup that just finished opens its card (and has redrawn the panel)
+    if (!opened && (graph || before !== JSON.stringify([mn.callId, mn.items, mn.orgs]))) refreshMentions();
+    mnPill();
     mnPoll();
   }
   function mnPoll() {
     if (!LIVE_MODE || mn.timer || !mnPending()) return;
     mn.timer = setTimeout(async () => { mn.timer = null; await loadMentions(); }, 1800);
   }
-  // On the People tab, redraw it (and its mini map). Elsewhere, only the tab's count changes, so a note being typed is never touched.
+  // On the People tab, redraw it (and its mini map); a mentioned person's open card, only when what it shows changed.
+  // Elsewhere, only the tab's count changes, so a note being typed is never touched.
   function refreshMentions() {
-    if (state.tab === "people" && !state.view) { const y = window.scrollY; render(); window.scrollTo(0, y); return; }
+    const v = state.view;
+    if ((state.tab === "people" && !v) || (v && v.kind === "mention" && mentionView(v) !== v.shown)) { const y = window.scrollY; render(); window.scrollTo(0, y); return; }
     const tab = $("#tab-people");
     if (!tab || !state.ctx) return;
     const n = state.ctx.people.length + mnCount();
@@ -361,9 +370,10 @@
   const mnBrief = (x) => (x.about ? '<p class="p-person-sub">' + esc(x.about) + " · AI summary, not checked</p>" : "")
     + (x.why ? '<p class="p-person-sub">Why it matters: ' + esc(x.why) + "</p>" : "")
     + (x.heardAs ? '<p class="p-person-sub">Captions said “' + esc(x.heardAs) + "”</p>" : "");
+  const mnTag = (it) => (it.autoFound && !it.confirmed && it.status === "found" ? ["Found automatically", "tag-green"] : MN_TAG[it.status] || MN_TAG.notfound);
   function mnRow(it) {
     const p = it.person, c0 = it.status === "pick" && it.candidates && it.candidates[0];
-    const t = it.autoFound && !it.confirmed && it.status === "found" ? ["Found automatically", "tag-green"] : MN_TAG[it.status] || MN_TAG.notfound;
+    const t = mnTag(it);
     const name = p ? p.name : c0 ? c0.name : it.name || cap(it.role) || "Someone";
     const sub = [p ? p.title : c0 ? c0.title : it.role ? cap(it.role) : "", it.said && it.said.label].filter(Boolean).join(" · ");
     const acts = [];
@@ -372,7 +382,10 @@
       if (c0) acts.push('<button type="button" class="link-btn" data-mn-act="pick" data-mn-index="0">' + esc("Pick " + c0.name) + "</button>");
       acts.push(mnConnBtn(it));
     }
-    return '<li class="p-mn" data-mn="' + esc(it.id) + '">' + avatar({ name }, "md") + '<div class="p-mn-text"><p class="p-person-name">' + esc(name)
+    // A finished lookup opens as a card (mentionView); one that finished while you were busy is marked New until you open it.
+    return '<li class="p-mn" data-mn="' + esc(it.id) + '">' + avatar({ name }, "md") + '<div class="p-mn-text"><p class="p-person-name">'
+      + (mnReady(it) ? '<button type="button" class="link-btn p-mn-open" data-mn-open="' + esc(it.id) + '" aria-label="' + esc("Open what Overture found about " + name) + '">' + esc(name) + "</button>" : esc(name))
+      + (mnNew.fresh.includes(it.id) ? '<span class="pill accent">New</span>' : "")
       + '<span class="pill ' + t[1] + '">' + (it.status === "pending" ? ic("loader", "spin") : "") + esc(t[0]) + "</span></p>"
       + (sub ? '<p class="p-person-sub">' + esc(sub) + "</p>" : "") + mnBrief(it)
       + (it.quote && it.quote.text ? '<p class="p-mn-quote">“' + esc(it.quote.text) + "”</p>" : "")
@@ -411,6 +424,165 @@
       applyMentions(id, await window.C.postJson("/api/mentions/pick", body, 15000));
       announce({ confirm: "Confirmed.", none: "Marked as not them.", pick: "Picked. Added to the map.", remove: "Removed from the map.", restore: "Back on the map." }[action] || "Done.");
     } catch (e) { btn.disabled = false; announce(e.message); }
+  }
+
+  // ---------- research on someone mentioned opens by itself when it's done ----------
+  // A lookup that finishes while the panel watches (Looking up… -> Found, found in your records, or Likely with a candidate)
+  // opens that person's card in the pane (mentionView), once per person per call: one opened or closed never opens by itself
+  // again, and what was already found when the panel loaded never does. Several at once: the newest opens, the rest stay
+  // marked New. While you're busy in the panel nothing moves and focus stays (busy()): a small "Name: research ready" pill
+  // waits at the bottom instead; it also holds whatever finished behind an open card.
+  const mnNew = { callId: null, seen: new Set(), fresh: [], typedAt: 0, pressedAt: 0, lastFocus: "", asking: false };
+  const mnReady = (x) => (["found", "known"].includes(x.status) && !!x.person) || (x.status === "pick" && !!(x.candidates && x.candidates[0]));
+  const mnWho = (x) => x.person || (x.status === "pick" && x.candidates && x.candidates[0]) || null; // whom the card is about
+  // Busy: a click, key or scroll in the last 2 s (the pane must not swap under it), a key into a field in the last 4 s (even if
+  // you've since switched to the call: the note's last words are still being sent), or a focused text field that holds words.
+  function busy() {
+    if (Date.now() - mnNew.pressedAt < 2000 || Date.now() - mnNew.typedAt < 4000) return true;
+    const a = document.activeElement, field = !a || !a.closest || !document.hasFocus() ? null : a.closest("#noteForm") ? $("#noteText")
+      : a.matches("textarea, input:not([type=checkbox]):not([type=radio]), [contenteditable]") ? a : null;
+    return !!field && !!String("value" in field ? field.value : field.textContent).trim();
+  }
+  // Every mentions answer comes through here; true when it opened a card (render() has run).
+  function mnFinished(id) {
+    if (mnNew.callId !== id) { Object.assign(mnNew, { callId: id, seen: new Set(mn.items.filter(mnReady).map((x) => x.id)), fresh: [] }); return false; }
+    // turned down or gone since: not new any more (a late answer that still says Looking up… doesn't count)
+    mnNew.fresh = mnNew.fresh.filter((f) => mn.items.some((x) => x.id === f && (mnReady(x) || x.status === "pending")));
+    const done = mn.items.filter((x) => mnReady(x) && !mnNew.seen.has(x.id));
+    if (!done.length) return false;
+    done.forEach((x) => { mnNew.seen.add(x.id); mnNew.fresh.push(x.id); });
+    const newest = done.reduce((a, b) => ((Date.parse(b.at) || 0) >= (Date.parse(a.at) || 0) ? b : a)); // heard last, else last in the list
+    if (state.ctx && !state.view && !busy()) { openMention(newest.id, true); return true; }
+    mnNew.fresh = mnNew.fresh.filter((f) => f !== newest.id).concat(newest.id); // the pill shows the newest
+    announce(((mnWho(newest) || {}).name || newest.name || "Someone") + ": research ready. Open it from the bottom of the panel.");
+    return false;
+  }
+  // The live pass can add someone between two mentions answers, and the live feed hears of them first: then ask for the mentions
+  // (once at a time; while anything is still being looked up, mnPoll asks anyway).
+  function mnBehind(id) {
+    const heard = assist.data ? assist.data.items.filter((x) => x.kind === "person" && String(x.id).startsWith("person:")) : [];
+    if ((mn.callId !== id && mn.callId) || mnPending() || mnNew.asking || !heard.some((x) => !mn.items.some((y) => "person:" + y.id === x.id))) return;
+    mnNew.asking = true;
+    loadMentions().finally(() => { mnNew.asking = false; });
+  }
+  // Open a mentioned person's card in the pane, under the tabs. auto: its lookup just finished (nothing you pressed), so the
+  // card flashes once and focus stays where it was (render() redrew it); from a row or the pill, focus goes to Back.
+  // from: the tab, scroll, focus and open profile to go back to (a card opened from another card keeps the first one's).
+  function openMention(id, auto) {
+    const it = mn.items.find((x) => x.id === id);
+    if (!state.ctx || !it) return;
+    const a = document.activeElement, inApp = !!a && $("#app").contains(a);
+    const from = state.view && state.view.kind === "mention" ? state.view.from
+      : { tab: state.tab, y: window.scrollY, focus: inApp ? a.id || "" : mnNew.lastFocus, view: state.view };
+    state.view = { kind: "mention", id, from };
+    mnNew.seen.add(id);
+    mnNew.fresh = mnNew.fresh.filter((f) => f !== id);
+    render();
+    const card = $(".p-mnv"), tabs = $(".p-tabs"), still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    window.scrollTo({ top: Math.max(0, card.getBoundingClientRect().top + window.scrollY - (tabs ? tabs.offsetHeight : 0) - 8), behavior: auto && !still ? "smooth" : "auto" });
+    const name = (mnWho(it) || {}).name || it.name || "Someone", head = $(".p-mnv-head"), kept = inApp && a.id && document.getElementById(a.id);
+    if (auto) {
+      if (kept) kept.focus({ preventScroll: true });
+      if (head) head.classList.add("p-flash");
+      announce(name + ": research ready, shown in the panel. Escape goes back to " + BACK_TO[from.tab] + ".");
+    } else { $(".p-mnv-back").focus({ preventScroll: true }); announce("Showing what Overture found about " + name + "."); }
+  }
+  // The pill at the bottom of the panel: research that finished while you typed, or behind an open card. It opens the newest.
+  function mnPill() {
+    const open = state.view && state.view.kind === "mention" ? state.view.id : "";
+    const ids = mnNew.callId === state.callId && mn.callId === state.callId ? mnNew.fresh.filter((f) => f !== open) : [];
+    const it = ids.length ? mn.items.find((x) => x.id === ids[ids.length - 1]) : null;
+    const name = it ? (mnWho(it) || {}).name || it.name || "Someone" : "", key = it ? it.id + "|" + name + "|" + ids.length : "";
+    let el = $("#mnReady");
+    if (!el && !key) return;
+    if (!el) { el = document.createElement("div"); el.id = "mnReady"; el.className = "p-ready"; document.body.append(el); }
+    if (el.dataset.key !== key) {
+      const had = el.contains(document.activeElement);
+      el.dataset.key = key;
+      el.innerHTML = it ? '<button type="button" class="p-ready-open" data-mn-open="' + esc(it.id) + '">' + avatar({ name }, "sm") + '<span class="p-ready-t">' + esc(name) + ": research ready</span>"
+        + (ids.length > 1 ? '<span class="p-ready-more num">+' + (ids.length - 1) + '<span class="sr-only"> more</span></span>' : "") + ic("chevron") + "</button>"
+        + '<button type="button" class="p-ready-x" data-mn-dismiss aria-label="Dismiss">' + ic("x") + "</button>" : "";
+      if (had && it) el.querySelector("button").focus(); // the next one takes the place of the one you were on
+    }
+    el.hidden = !key;
+    document.documentElement.classList.toggle("p-has-ready", !!key);
+  }
+
+  // ---------- a mentioned person's card, in the pane ----------
+  // The parts of a guest's profile here (profile.js): face, name, role at company, a plain description with numbered sources,
+  // the rest as bullets, the sources, then the row's own actions. Lookups never fetch photos, so the face is Overture's avatar
+  // (a photo only when the name is a guest on your calendar). A likely match or a misheard name or company says so first.
+  const BACK_TO = { brief: "the brief", people: "people", notes: "notes" };
+  const srcDay = (d) => (/^\d{4}$/.test(d) ? d : /^\d{4}-\d{2}(-\d{2})?$/.test(d) ? fmtDate(d) : "");
+  const period = (s) => (/[.!?”]$/.test(s) ? s : s + ".");
+  function mentionView(v) {
+    const it = mn.items.find((x) => x.id === v.id), back = v.from.view; // opened over a guest's or a company's profile: back to it
+    let h = '<div class="pp p-mnv"' + (it ? ' data-mn="' + esc(it.id) + '"' : "") + '><button type="button" class="btn secondary p-mnv-back" data-pp-back aria-keyshortcuts="Escape">'
+      + ic("arrowLeft") + "Back to " + esc(back ? (back.kind === "person" ? window.CP.who(back.email).name : back.name) : BACK_TO[v.from.tab]) + "</button>";
+    if (!it) return h + '<p class="pf-state">' + ic("circleAlert") + "<span>This mention isn't on the call's list any more.</span></p></div>";
+    const p = mnWho(it) || {}, x = it.explain || {}, q = it.quote || {}, said = it.said || {}, ok = window.CP.orgKey, call = window.C.inviteById(state.callId).company;
+    const cands = (it.candidates || []).map((c, i) => c && { c, i }).filter(Boolean); // each keeps its place: Pick sends it
+    const name = p.name || it.name || cap(it.role) || "Someone", company = p.organizationLabel || p.companyHint || (/^at /.test(it.role) ? it.role.slice(3) : "") || call;
+    const at = company ? " at " + company : "", team = p.team && !String(p.title || "").toLowerCase().includes(p.team.toLowerCase()) ? p.team : "";
+    // Numbered sources (http and https links only); a sourced sentence carries its numbers.
+    const S = [], num = {};
+    ((x.evidence || []).length ? x.evidence : p.sources || []).forEach((s, i) => {
+      const href = window.C.safeHref(s && s.url);
+      if (href) { num[i] = S.length; S.push({ href, label: s.label || new URL(href).hostname, host: new URL(href).hostname.replace(/^www\./, ""), date: srcDay(s.date || "") }); }
+    });
+    const cites = (list) => window.CP.cites((list || []).filter((i) => i in num).map((i) => num[i]), S);
+    // "Ravy from DKS" when Overture knows TKS: what was heard, who it likely is, and to check it.
+    const heard = it.heardAs || (p.inferred && p.spokenName) || "", heardCo = it.companyHeard || "";
+    const likely = !it.confirmed && (it.status === "pick" || !!p.inferred || !!heard || !!heardCo || !!p.organizationUnverified);
+    if (likely) h += '<p class="pf-state p-mnv-warn">' + ic("circleAlert") + "<span><strong>"
+      + esc(heard || heardCo ? "Heard “" + (heard || it.name || name) + (heardCo ? " from " + heardCo : "") + "”; likely " + name + at + "."
+        : it.status === "pick" ? "Likely " + name + at + ", not confirmed." : "Likely " + name + ", but the company may not be " + company + ".")
+      + "</strong> Check before you use it.</span></p>";
+    const t = mnTag(it), rel = window.C.RELATION[p.relationship];
+    h += '<header class="pp-head p-mnv-head">' + avatar({ name }, "xl") + '<div class="pp-head-t"><h2 class="pp-name">' + esc(name) + "</h2>"
+      + (p.title || company ? '<p class="pp-sub">' + esc([p.title, company].filter(Boolean).join(" · ")) + "</p>" : "")
+      + '<p class="pp-pills"><span class="pill ' + t[1] + '">' + (it.status === "pending" ? ic("loader", "spin") : "") + esc(t[0]) + "</span>"
+      + (rel ? '<span class="pill tag-blue">' + esc(rel) + "</span>" : "") + (it.confirmed ? '<span class="pill tag-gray">Confirmed</span>' : "") + "</p></div></header>";
+    // What they do, in plain words: the lookup's sourced sentences (else their team), then the live AI pass's line, marked as such.
+    const lines = ((x.explanation || []).length ? x.explanation : p.explanation || []).filter((s) => s && s.text).slice(0, 2);
+    const desc = lines.length ? lines.map((s) => esc(s.text) + cites(s.sources)).join(" ") : team ? esc("Works on the " + team + " team" + at + ".") : "";
+    if (desc) h += '<p class="pf-lead">' + desc + "</p>";
+    if (it.about) h += '<p class="p-mnv-ai">' + esc(period(it.about)) + ' <span class="la-ai">AI summary, not checked</span></p>';
+    if (!p.name && it.note) h += '<p class="pf-state">' + ic("circleAlert") + "<span>" + esc(it.note) + "</span></p>";
+    // The points: role, company and how it ties to this call, how they came up, why it matters, and what Overture holds on them.
+    const li = [], org = mn.orgs.find((o) => ok(o.name) === ok(company)), orgRel = org && org.relation && org.relation.type !== "unknown" ? org.relation : null;
+    const role = [p.title, team ? team + " team" : ""].filter(Boolean).join(", ") || (said.label || (/^at /.test(it.role) ? "" : it.role) ? cap(said.label || it.role) + " (said on the call)" : "");
+    if (role) li.push(["Role", esc(role)]);
+    if (company) li.push(["Company", esc(company + (ok(company) === ok(call) ? ", the company on this call" : orgRel ? ", " + orgRel.label + (orgRel.source === "said" ? " (said on the call)" : "") : "")
+      + (p.organizationUnverified ? ". Not confirmed it's this company" : ""))]);
+    li.push(["On the call", esc(q.text ? "“" + q.text + "”" + (q.speaker || q.time ? " (" + [q.speaker, q.time].filter(Boolean).join(", ") + ")" : "") + (it.count > 1 ? ", " + plural(it.count, "mention") : "")
+      : "Mentioned" + (x.found && x.found.via ? " in " + x.found.via : "") + (q.time ? " at " + q.time : ""))]);
+    if (said.said && !String(q.text || "").includes(said.said.replace(/…/g, ""))) li.push(["Said about them", esc("“" + said.said + "”" + (said.speaker ? " (" + said.speaker + ")" : ""))]);
+    if (it.why) li.push(["Why it matters", esc(period(it.why)) + ' <span class="la-ai">AI summary, not checked</span>']);
+    if (p.whyPossible || p.why) li.push([likely ? "Why it may be them" : "Why it's them", esc(period(p.whyPossible || p.why) + (p.confidence ? " " + cap(p.confidence) + " confidence." : ""))]);
+    if (it.status === "pick" && cands.length > 1) li.push(["Other possible matches", esc(cands.slice(1).map(({ c }) => c.name + (c.title ? " (" + c.title + ")" : "")).join("; "))]);
+    if (p.tenure) li.push(["Time there", esc(p.tenure)]);
+    if (p.met && p.met.known) li.push(["You and them", esc(p.met.last ? "You've met them (last " + p.met.last + ")." : "You haven't met them.")]);
+    const recs = [it.status === "known" || p.from === "Overture records" || it.added ? "In Overture's records" : "", p.from === "HubSpot" ? "Already a contact in HubSpot"
+      : it.hubspot === "unknown" ? "A save to HubSpot got no answer: check HubSpot before saving again" : it.hubspot ? "Saved to HubSpot as a contact" : ""].filter(Boolean);
+    if (recs.length) li.push(["Records", esc(recs.join(". ") + ".")]);
+    h += '<ul class="pf-list" role="list">' + li.map(([k, val]) => '<li><span class="pf-txt"><strong>' + k + ":</strong> " + val + "</span></li>").join("") + "</ul>";
+    if (S.length) h += '<h3 class="p-label">' + (S.length > 1 ? "Sources" : "Source") + '</h3><ol class="pf-srcs" role="list">' + S.map((s, i) => '<li><span class="pf-n" aria-hidden="true">' + (i + 1) + "</span>"
+      + '<span class="pf-src-t"><a href="' + esc(s.href) + '" target="_blank" rel="noopener noreferrer"><span class="sr-only">Source ' + (i + 1) + ": </span>" + esc(s.label) + ic("link", "ext") + window.C.NEW_TAB + "</a>"
+      + '<span class="pf-host">' + esc([s.host, s.date].filter(Boolean).join(" · ")) + "</span></span></li>").join("") + "</ol>";
+    else if (p.from && p.from !== "Web") h += '<p class="p-hint">' + esc("From " + p.from + ", not the web.") + "</p>";
+    // The row's own actions (mnAct finds this card by its data-mn), the map, and where the rest lives (HubSpot, Overture records).
+    const acts = [];
+    if (LIVE_MODE && it.status === "pick") {
+      cands.forEach(({ c, i }) => acts.push('<button type="button" class="btn secondary sm" data-mn-act="pick" data-mn-index="' + i + '">' + ic("check") + esc("Pick " + c.name) + "</button>"));
+      acts.push('<button type="button" class="btn ghost sm" data-mn-act="none">' + (cands.length > 1 ? "None of these" : "Not them") + "</button>");
+    } else if (LIVE_MODE && it.autoFound && !it.confirmed) acts.push('<button type="button" class="btn secondary sm" data-mn-act="confirm">' + ic("check") + 'Confirm</button><button type="button" class="btn ghost sm" data-mn-act="none">Not them</button>');
+    if (acts.length) h += '<p class="p-mn-acts">' + acts.join("") + "</p>";
+    if (LIVE_MODE && mnConnBtn(it)) h += '<p class="p-hint">' + (it.removed ? "Not on the People map. " : "On the People map. ") + mnConnBtn(it) + "</p>";
+    const demo = window.C.MODE === "demo" ? "?demo=1" : "", guest = name.includes(" ") ? D.invites.reduce((g, i) => g || i.attendees.find((a) => a.name.toLowerCase() === name.toLowerCase()), null) : null;
+    h += '<p class="pp-open">' + (guest ? '<a href="index.html' + demo + "#/people/" + esc(window.C.personKey(guest.email)) + '" target="_blank" rel="noopener">Open the full profile' + ic("link", "ext") + window.C.NEW_TAB + "</a>" : "")
+      + '<a href="index.html' + demo + "#/calls/" + esc(encodeURIComponent(state.callId)) + '/after" target="_blank" rel="noopener">Open in After the call' + ic("link", "ext") + window.C.NEW_TAB + "</a></p>";
+    return h + "</div>";
   }
 
   // Notes, read as you type: only the new text goes to Overture's own server (500 ms after you stop typing); saving the note finishes it.
@@ -584,6 +756,7 @@
   }
   document.addEventListener("click", (e) => { if (e.target.closest("[data-cc-done]")) captionsDone("button"); });
   document.addEventListener("input", (e) => {
+    mnNew.typedAt = Date.now(); // a finished lookup waits in the pill while you type (busy())
     if (e.target.id !== "noteText" || !LIVE_MODE) return;
     live.draft = e.target.value;
     clearTimeout(live.timer);
@@ -605,6 +778,7 @@
   }
   function viewPane() {
     const v = state.view, back = state.tab === "people" ? "People" : "Brief";
+    if (v.kind === "mention") return (v.shown = mentionView(v)); // kept, so a mentions answer redraws it only when it changed
     if (v.kind === "person") {
       const p = state.ctx.people.find((x) => x.email === v.email);
       return window.CP.panelPerson(v.email, Object.assign({ back, top: p ? personTop(p) : "" }, panelLinks));
@@ -623,8 +797,14 @@
   }
   function closeView() {
     const v = state.view;
-    state.view = null;
+    state.view = v && v.kind === "mention" ? v.from.view || null : null;
     render();
+    if (v && v.kind === "mention") { // back to the tab (or profile) and the place you were, focus where it was (a note keeps its caret at the end)
+      window.scrollTo(0, v.from.y);
+      const f = (v.from.focus && document.getElementById(v.from.focus)) || $('#app [data-mn-open="' + CSS.escape(v.id) + '"]') || $("#tab-" + state.tab);
+      if (f) { f.focus({ preventScroll: true }); if (f.id === "noteText") f.setSelectionRange(f.value.length, f.value.length); }
+      return;
+    }
     const back = v && (v.kind === "person" ? $('[data-person="' + CSS.escape(v.email) + '"]') : $("[data-pp-org]"));
     if (back) back.focus();
   }
@@ -644,6 +824,7 @@
       + '<div id="pane" role="tabpanel" aria-labelledby="tab-' + state.tab + '" class="p-pane">' + (state.view ? viewPane() : panes[state.tab]()) + "</div>";
     if (mini) { mini.destroy(); mini = null; }
     if (state.tab === "people" && !state.view && window.CMap && $("#miniMap")) mini = window.CMap.mount($("#miniMap"), { mode: "stack", callId: state.callId, compact: true });
+    mnPill();
   }
 
   function setTab(t, focus) {
@@ -689,6 +870,15 @@
     if (rs) { researchAction(rs); return; }
     const ma = e.target.closest("[data-mn-act]");
     if (ma) { mnAct(ma); return; }
+    // A mentioned person's card: from their row or the pill; the pill's x lets what's new go.
+    const mo = e.target.closest("[data-mn-open]");
+    if (mo) { openMention(mo.dataset.mnOpen, false); return; }
+    if (e.target.closest("[data-mn-dismiss]")) {
+      mnNew.fresh = []; mnPill(); refreshMentions();
+      const f = (mnNew.lastFocus && document.getElementById(mnNew.lastFocus)) || $("#tab-" + state.tab); // the pill is gone: focus back in the panel
+      if (f) f.focus({ preventScroll: true });
+      return;
+    }
     if (e.target.closest("[data-mt-pick]")) { meetilyPick(); return; }
     // Profiles inside the panel: a guest, a company, the way back, and a connection's card.
     if (e.target.closest("[data-pp-back]")) { closeView(); return; }
@@ -701,6 +891,10 @@
     const p = e.target.closest("[data-person]");
     if (p) openView({ kind: "person", email: p.dataset.person });
   });
+  // Where focus was in the panel before the pill took it: Back from a card opened there returns it (closeView). A click, key or
+  // scroll anywhere keeps a finished lookup in the pill for 2 s, so the pane never swaps under it (busy()).
+  document.addEventListener("focusin", (e) => { if ($("#app").contains(e.target)) mnNew.lastFocus = e.target.id || ""; });
+  ["pointerdown", "keydown", "wheel"].forEach((t) => document.addEventListener(t, () => { mnNew.pressedAt = Date.now(); }, { capture: true, passive: true }));
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && state.view && !e.target.closest("textarea, input, select")) { closeView(); return; }
     const tab = e.target.closest("[role=tab]");
@@ -727,6 +921,7 @@
       Object.assign(live, { seg: "", sent: "", next: null, fins: [], paused: "", draft: "", latest: "", busy: false, ownerCall: state.callId, epoch: state.streamEpoch });
       clearTimeout(assist.timer); Object.assign(assist, { callId: state.callId, data: null, error: "", timer: null });
       Object.assign(mn, { callId: state.callId, items: [], orgs: [] });
+      mnPill(); // the old call's "research ready" goes with it
       state.startedAt = Date.now();
       if (HOST === "ext" && !firstPick) extensionMessage({ type: "overture-captions-reset" });
       if (HOST === "ext") extensionMessage({ type: "overture-panel-ready", live: LIVE_MODE, connected: LIVE_MODE, callId: state.callId, captionsReady: captionsOn() });
