@@ -312,3 +312,6 @@
 @media (prefers-reduced-motion: reduce) {
   :root[data-theme="dark"] .node { transition: none; }
 }
+
+/* Each person's lines have their own colour (map.js OWNER_COLORS); their avatar wears it as a ring. */
+.node.person.owned .avatar { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--owner); }

@@ -30,7 +30,13 @@
   const runs = {};   // per call id, kept for the session: { ctx, states, ticks, tab, notes, changes, claude, error }
   const inputs = {}; // per call id: { versionFile, since } — also saved for the in-call panel
   let runningId = null;
-  const readAlerts = new Set();
+  // Alerts you've read stay read after a reload: their ids in this browser, per account (never sent anywhere).
+  const READ_KEY = "alertsRead:" + (DEMO ? "demo" : encodeURIComponent(String(ME.email || "").toLowerCase() || "anonymous"));
+  const readAlerts = new Set([].concat(store.get(READ_KEY) || []));
+  const saveRead = () => store.set(READ_KEY, Array.from(readAlerts).slice(-300));
+  // A meeting erased from Settings > Deleted meetings (now, or 30 days after you deleted it): this browser's copies of its notes go too.
+  const forgetCallHere = (id) => ["notes:", "inputs:", "ticks:"].forEach((p) => { try { localStorage.removeItem(store.key(p + id)); } catch (e) { /* storage blocked */ } });
+  (D.erasedCalls || []).forEach(forgetCallHere);
   let mapInstance = null;
   let personMap = null; // the connection map on a person's page (profile.js)
   D.invites.forEach((inv) => { inputs[inv.id] = store.get("inputs:" + inv.id) || { versionFile: inv.versionFile || "", since: inv.backstageSince || null }; });
@@ -50,9 +56,10 @@
   const relDay = (n) => (n === 0 ? "today" : n === 1 ? "tomorrow" : n < 0 ? plural(-n, "day") + " ago" : "in " + plural(n, "day"));
   const longDay = (inv) => callDate(inv).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
 
-  // Alerts with stable ids for links: job change / come back are sample, the security wave is public.
+  // Alerts with stable ids for links: job change / come back are sample, the security wave is public (its id carries the newest
+  // notice's date, so a new notice is unread again after you read the last one).
   function alerts() {
-    return C.allAlerts().map((a) => Object.assign({}, a, { id: a.id === "security" ? "security-notices" : slug(a.title) }));
+    return C.allAlerts().map((a) => Object.assign({}, a, { id: a.id === "security" ? "security-notices-" + slug(a.date) : slug(a.title) }));
   }
   const unreadCount = () => alerts().filter((a) => !readAlerts.has(a.id)).length;
   // Settings > Alert rules: "daily digest" groups a day's alerts into one; quiet hours hold the badge and pop-ups back.
@@ -100,10 +107,11 @@
     + (sub ? '<p class="page-sub">' + sub + "</p>" : "") + "</header>";
   const names = (inv) => { const n = inv.attendees.map((a) => a.name); return n.length > 1 ? n.slice(0, -1).join(", ") + " and " + n[n.length - 1] : n[0]; };
   const kindOf = (inv) => inv.title.split(":")[0];
-  // Remove a call from Overture (the rail, the call page, the Calls page): a small trash button. Google Calendar is never changed.
+  // Delete a call from Overture (the rail, the call page, the Calls page): a small trash button. It waits in Settings > Deleted
+  // meetings for 30 days. Google Calendar is never changed.
   const callName = (inv) => inv.company + " " + splitWhen(inv.when).day;
-  const removeBtn = (inv, cls, style) => '<button type="button" class="' + cls + '" data-hide-call="' + esc(inv.id) + '" aria-label="' + esc("Remove " + callName(inv) + " from Overture")
-    + '" title="' + esc("Remove " + callName(inv) + " from Overture") + '"' + (style ? ' style="' + esc(style) + '"' : "") + ">" + ic("trash") + "</button>";
+  const removeBtn = (inv, cls, style) => '<button type="button" class="' + cls + '" data-hide-call="' + esc(inv.id) + '" aria-label="' + esc("Delete " + callName(inv))
+    + '" title="' + esc("Delete " + callName(inv)) + '"' + (style ? ' style="' + esc(style) + '"' : "") + ">" + ic("trash") + "</button>";
 
   // ---------- toast (only for "brief ready" while you are elsewhere, and Undo after removing a call) ----------
   let toastTimer = null, toastAction = null;
@@ -664,9 +672,9 @@
     return true;
   }
   async function runAgent(id) {
-    if (runningId) return;
-    runningId = id;
     const inv = inviteById(id);
+    if (runningId || !inv) return; // a call deleted while its page was open has nothing to run
+    runningId = id;
     const prev = runs[id];
     const run = runs[id] = { ctx: null, states: {}, ticks: prev ? prev.ticks : new Set(), tab: afterNext.delete(id) ? "after" : "brief",
       notes: prev ? prev.notes : inv.afterNotes || "", changes: prev ? prev.changes : null, claude: null, error: null };
@@ -1831,7 +1839,7 @@
   function renderAlerts() {
     const list = ibSorted();
     let a = list.find((x) => x.id === app.alertId);
-    if (a) readAlerts.add(a.id); // opening an alert reads it
+    if (a) { readAlerts.add(a.id); saveRead(); } // opening an alert reads it
     else if (list.length && matchMedia(IB_WIDE).matches) {
       // Wide screens open the newest unread alert instead of an empty pane; it stays unread until you open or mark it.
       a = list.find((x) => !readAlerts.has(x.id)) || list[0];
@@ -1842,6 +1850,7 @@
   }
   function ibToggle(id) {
     if (readAlerts.has(id)) readAlerts.delete(id); else readAlerts.add(id);
+    saveRead();
     drawAlerts();
     renderNav();
     announce("Marked " + (readAlerts.has(id) ? "read" : "unread"));
@@ -1851,7 +1860,7 @@
     if (r) { ibToggle(r.dataset.ibRead); return; }
     const f = e.target.closest("[data-ib-filter]");
     if (f) { ib.filter = f.dataset.ibFilter; drawAlerts('[data-k="f-' + ib.filter + '"]'); return; }
-    if (e.target.closest("[data-ib-all]")) { alerts().forEach((a) => readAlerts.add(a.id)); drawAlerts(); renderNav(); announce("All alerts marked read"); return; }
+    if (e.target.closest("[data-ib-all]")) { alerts().forEach((a) => readAlerts.add(a.id)); saveRead(); drawAlerts(); renderNav(); announce("All alerts marked read"); return; }
     const s = e.target.closest("[data-ib-step]");
     if (s) go("#/alerts/" + s.dataset.ibStep);
   });
@@ -2140,7 +2149,7 @@
   // Every call's saved connections, fetched again when the map opens (the in-call panel may have added some since this page loaded).
   async function refreshMapConnections() {
     const changed = await Promise.all(D.invites.map((i) => C.fetchTimeout("/api/mentions?callId=" + encodeURIComponent(i.id), 8000)
-      .then((r) => (r.ok ? r.json() : null)).then((j) => !!(j && C.mergeConnections(i.id, j.graph))).catch(() => false)));
+      .then((r) => (r.ok ? r.json() : null)).then((j) => !!(j && inviteById(i.id) && C.mergeConnections(i.id, j.graph))).catch(() => false))); // deleted meanwhile: not merged back
     if (changed.some(Boolean) && app.view === "map" && mapInstance) mountMap();
   }
   function mountMap() {
@@ -2184,9 +2193,10 @@
     announce(DEMO ? "Sample data: removed on this page only." : "Removed from the People map.");
   }
 
-  // ---------- remove a call from Overture (never from Google Calendar) ----------
+  // ---------- delete a call from Overture (never from Google Calendar) ----------
   // POST /api/calls/hide keeps the list in your own records. The call leaves every page here at once (rail, Calls, Home, alerts,
-  // map), with Undo in a message; Restore on the Data page puts back one removed earlier (on a later visit the page loads again).
+  // map), with Undo in a message. It waits in Settings > Deleted meetings for 30 days: Restore puts it back (one deleted on an earlier
+  // visit loads the page again), Delete for good erases what Overture saved for it now; after 30 days the server erases it.
   const taken = {}; // call id -> what left this page with it, so Undo puts it back without loading again
   function dropCall(id) {
     const at = D.invites.findIndex((i) => i.id === id);
@@ -2197,7 +2207,9 @@
     D.watch = D.watch.filter((x) => !mine(x));
     D.mentioned = D.mentioned.filter((x) => !mine(x));
     D.relationships = D.relationships.filter((x) => !mine(x));
-    D.hiddenCalls = (D.hiddenCalls || []).filter((x) => x.id !== id).concat([{ id, company: inv.company, title: inv.title, when: inv.when, start: inv.start, ended: !!inv.ended }]);
+    const now = Date.now();
+    D.hiddenCalls = [{ id, company: inv.company, title: inv.title, when: inv.when, start: inv.start, ended: !!inv.ended,
+      deletedAt: new Date(now).toISOString(), eraseOn: new Date(now + 30 * 864e5).toISOString() }].concat((D.hiddenCalls || []).filter((x) => x.id !== id));
     return inv;
   }
   function putBack(id) {
@@ -2222,18 +2234,30 @@
     else if (app.view === "map") renderMap();
     else if (app.view === "companies") renderCompanies();
     else if (app.view === "data") renderData();
+    else if (app.view === "settings") redrawDeleted();
+    else if (app.view === "company") { const n = companyBySlug(app.slug); if (n) renderCompany(n); else go("#/companies", true); }
+    else if (app.view === "live") renderLive();
+    else if (app.view === "people") { const em = C.emailForKey(app.personKey); if (em) renderPerson(em); else go("#/map", true); }
+  }
+  // Settings > Deleted meetings after Restore or Delete for good: draw the list again and keep the keyboard in it.
+  function redrawDeleted() {
+    if (app.view !== "settings" || !window.OvertureSettingsPage || !/^#\/settings\/deleted/.test(location.hash)) return;
+    window.OvertureSettingsPage.render("deleted");
+    const el = $("[data-restore-call]") || $(".st-h");
+    if (el) el.focus();
   }
   async function hideCall(id, hidden, kb) {
     if (hidden) {
-      if (runningId === id) { toast("Wait for this call's brief to finish, then remove it."); return; }
+      if (runningId === id) { toast("Wait for this call's brief to finish, then delete it."); return; }
       const inv = dropCall(id);
       if (!inv) return;
       afterCallsChange(id);
       if (!DEMO) {
-        try { await C.postJson("/api/calls/hide", { callId: id, hidden: true }, 15000); }
-        catch (e) { putBack(id); afterCallsChange(); toast("Not removed: " + e.message); return; }
+        const cut = (s) => String(s || "").slice(0, 300); // what the call was, so Deleted meetings can name it later
+        try { await C.postJson("/api/calls/hide", { callId: id, hidden: true, title: cut(inv.title), company: cut(inv.company), when: cut(inv.when), start: cut(inv.start) }, 15000); }
+        catch (e) { putBack(id); afterCallsChange(); toast("Not deleted: " + e.message); return; }
       }
-      toast("Removed " + callName(inv) + " from Overture" + (DEMO ? " (sample data, this page only)." : ". It stays on your Google Calendar."), "Undo", () => hideCall(id, false, kb));
+      toast("Deleted " + callName(inv) + (DEMO ? " (sample data, this page only)." : ". It waits in Settings › Deleted meetings for 30 days."), "Undo", () => hideCall(id, false, kb));
       if (kb) { const u = $("#toast [data-toast-act]"); if (u) u.focus(); }
       return;
     }
@@ -2248,13 +2272,27 @@
     const back = kb && $('#navWeek a[href="#/calls/' + CSS.escape(id) + '"]');
     if (back) back.focus();
   }
-  // Data page: the calls you removed, each with Restore.
+  // Settings > Deleted meetings: Delete for good erases what Overture saved for a call now (POST /api/calls/erase), not 30 days on.
+  async function eraseCall(id, btn) {
+    const x = (D.hiddenCalls || []).find((c) => c.id === id);
+    const name = x ? (x.company || x.title || "this meeting") + (x.when ? " (" + x.when + ")" : "") : "";
+    if (!x || !confirm("Delete " + name + " for good? Its notes, the people and companies found on it and their research are erased from Overture now. This can't be undone. Your Google Calendar isn't changed.")) return;
+    btn.disabled = true;
+    if (!DEMO) {
+      try { await C.postJson("/api/calls/erase", { callId: id }, 15000); }
+      catch (e) { btn.disabled = false; toast("Not deleted: " + e.message); return; }
+    }
+    delete taken[id];
+    forgetCallHere(id);
+    D.hiddenCalls = D.hiddenCalls.filter((c) => c.id !== id);
+    redrawDeleted();
+    toast("Deleted " + name + " for good" + (DEMO ? " (sample data, this page only)." : "."));
+  }
+  // Data page: the calls you deleted wait in Settings > Deleted meetings.
   function removedCallsHtml() {
-    const list = (D.hiddenCalls || []).slice().sort((a, b) => String(a.start).localeCompare(String(b.start)));
-    return '<section class="sec">' + secHead("Removed calls", "") + (list.length ? '<div class="list src-list">' + list.map((x) => '<div class="row"><span class="src-tile">' + ic("calendar") + "</span>"
-      + '<span class="src-text"><span class="row-title">' + esc(x.company) + '</span><span class="row-sub">' + esc(x.when + (x.title && x.title !== x.company ? " · " + x.title : "")) + "</span></span>"
-      + '<span class="src-act"><button type="button" class="btn secondary sm" data-restore-call="' + esc(x.id) + '" aria-label="' + esc("Restore " + callName(x) + " to Overture") + '">' + ic("rotate") + "Restore</button></span></div>").join("") + "</div>"
-      : '<p class="data-note">No removed calls. To take a call off Overture, use the trash button next to it. It stays on your Google Calendar.</p>') + "</section>";
+    const n = (D.hiddenCalls || []).length;
+    return '<section class="sec">' + secHead("Deleted meetings", "") + '<p class="data-note">' + (n ? plural(n, "meeting") + " waiting" : "None waiting")
+      + ' in <a href="#/settings/deleted">Settings › Deleted meetings</a>. Each is erased 30 days after you delete it. Your Google Calendar is never changed.</p></section>';
   }
 
   // ---------- in-call panel page ----------
@@ -2755,9 +2793,11 @@
       if (tg) { $("#toast").hidden = true; go(tg.dataset.toastGo); return; }
       if (e.target.closest("[data-toast-act]")) { $("#toast").hidden = true; const f = toastAction; toastAction = null; if (f) f(); return; }
       const hc = e.target.closest("[data-hide-call]");
-      if (hc) { hideCall(hc.dataset.hideCall, true, e.detail === 0); return; }
+      if (hc) { if (e.detail <= 1) hideCall(hc.dataset.hideCall, true, e.detail === 0); return; } // a double-click deletes one call, not the next too
       const rsc = e.target.closest("[data-restore-call]");
       if (rsc && !rsc.disabled) { rsc.disabled = true; hideCall(rsc.dataset.restoreCall, false, e.detail === 0); return; }
+      const erc = e.target.closest("[data-erase-call]");
+      if (erc && !erc.disabled) { eraseCall(erc.dataset.eraseCall, erc); return; }
       if (e.target.closest("[data-toast-close]")) { $("#toast").hidden = true; return; }
       if (e.target.closest("#openInCall")) { app.liveCall = app.callId; }
       const rc = e.target.closest("[data-rs-confirm]");

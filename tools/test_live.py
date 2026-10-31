@@ -4451,18 +4451,18 @@ class GuestNames(unittest.TestCase):
     """Who shows as a person on a call, and by what name: the People map's cards and groups come from these."""
 
     def test_names_made_from_the_address(self):
-        cases = {"ayaan.hussain4101@gmail.com": "Ayaan Hussain", "shlokparekh112@gmail.com": "Shlokparekh",
-                 "farhannigilharoon@gmail.com": "Farhannigilharoon",  # run together: no split is guessed
+        cases = {"lena.park4101@gmail.com": "Lena Park", "rohanmehta112@gmail.com": "Rohanmehta",
+                 "tomasvillanueva@gmail.com": "Tomasvillanueva",  # run together: no split is guessed
                  "marcus.bell@northwind-freight.com": "Marcus Bell", "sam_lee-ray@acme.com": "Sam Lee Ray", "sam+work@gmail.com": "Sam",
-                 "0man71ismharan@gmail.com": "0man71ismharan@gmail.com", "12345@gmail.com": "12345@gmail.com"}  # not a name: the address shows
+                 "0wen71castillo@gmail.com": "0wen71castillo@gmail.com", "12345@gmail.com": "12345@gmail.com"}  # not a name: the address shows
         for email, want in cases.items():
             self.assertEqual(S.name_from_email(email), want, email)
 
     def test_the_calendar_name_first_then_the_organizer_then_the_address(self):
-        e = ev("n1", "2026-10-21T14:00:00+00:00", 30, [SELF, att("ayaan.hussain4101@gmail.com", "Ayaan Hussain"), att("shlokparekh112@gmail.com"),
-               att("farhan.n@gmail.com")], organizer={"email": "farhan.n@gmail.com", "displayName": "Farhan Nigil Haroon"})
+        e = ev("n1", "2026-10-21T14:00:00+00:00", 30, [SELF, att("lena.park4101@gmail.com", "Lena Park"), att("rohanmehta112@gmail.com"),
+               att("tomas.v@gmail.com")], organizer={"email": "tomas.v@gmail.com", "displayName": "Tomas Villa Nueva"})
         names = [a["name"] for a in S.event_to_invite(e, ME["email"], S.empty_records())["attendees"]]
-        self.assertEqual(names, ["Ayaan Hussain", "Shlokparekh", "Farhan Nigil Haroon"])
+        self.assertEqual(names, ["Lena Park", "Rohanmehta", "Tomas Villa Nueva"])
 
     def test_role_system_and_resource_mailboxes_are_not_people(self):
         rec = S.empty_records()
@@ -4479,19 +4479,19 @@ class GuestNames(unittest.TestCase):
         self.assertEqual(sorted(live["people"]), ["dana@acme.com"])
 
     def test_the_same_person_twice_on_a_call_is_one_person(self):
-        e = ev("d1", "2026-10-21T14:00:00+00:00", 30, [SELF, att("mharanjeyananthan@gmail.com"), att("mharanjeyananthan@uwaterloo.ca"),
+        e = ev("d1", "2026-10-21T14:00:00+00:00", 30, [SELF, att("danielokafor@gmail.com"), att("danielokafor@uwaterloo.ca"),
                att("Priya.Raman@acme.com", "Priya Raman"), att("priyaraman@gmail.com"), att("sam@acme.com", "Sam"), att("Sam@Acme.com"),
                att("sam@globex.com", "Sam")])
         inv = S.event_to_invite(e, ME["email"], S.empty_records())
         self.assertEqual([(a["name"], a["email"]) for a in inv["attendees"]], [
-            ("Mharanjeyananthan", "mharanjeyananthan@uwaterloo.ca"),  # the work address is kept
+            ("Danielokafor", "danielokafor@uwaterloo.ca"),  # the work address is kept
             ("Priya Raman", "priya.raman@acme.com"),                  # with the fuller name
             ("Sam", "sam@acme.com"), ("Sam", "sam@globex.com")])     # two people both called Sam stay two people
         self.assertEqual(inv["company"], "Acme")
 
     def test_personal_email_guests_never_make_a_company(self):
         rec = S.empty_records()
-        e = ev("t1", "2026-10-21T14:00:00+00:00", 30, [SELF, att("farhannigilharoon@gmail.com"), att("sam.lee@rogers.com"), att("li@hotmail.ca")],
+        e = ev("t1", "2026-10-21T14:00:00+00:00", 30, [SELF, att("tomasvillanueva@gmail.com"), att("sam.lee@rogers.com"), att("li@hotmail.ca")],
                summary="Meeting Test")
         inv = S.event_to_invite(e, ME["email"], rec)
         self.assertEqual((inv["company"], inv["domain"], inv["noCompany"]), ("Meeting Test", "", True))  # the title is only the call's label
@@ -4750,6 +4750,170 @@ class SharedSite(ServerBase):
         self.assertEqual(json.loads(self.hreq("GET", "/api/records", cookie=b)[1])["hiddenCalls"], {})
         self.assertEqual(self.hreq("POST", "/api/calls/hide", {"callId": "e1", "hidden": True}, write=True)[0], 401)  # signed out
         self.assertEqual(self.hreq("POST", "/api/calls/hide", {"callId": "e1", "hidden": True}, cookie=b)[0], 403)  # not from Overture's page
+
+
+# ---------------------------------------------------------------- someone named with a company ("Ravi from TKS"), looked up while the call runs ----------------------------------------------------------------
+
+RAVI_URL = "https://tks.world/team/ravi"
+
+
+def personal_call_events(now, title="TKS Team 5 feedback"):
+    """A call running now whose guests are on personal email (so it has no company web address; "TKS" is only in its title),
+    a TKS call three days ago (the calendar knows tks.world), and the Northwind calls."""
+    return [ev("tk0", (now - timedelta(days=3)).isoformat(), 30, [SELF, att("shea.kim@tks.world", "Shea Kim")], summary="Prototype review"),
+            ev("pc1", (now - timedelta(minutes=10)).isoformat(), 45, [SELF, att("noah.reyes@gmail.com", "Noah Reyes"),
+                                                                     att("lena.park4101@gmail.com", "Lena Park")], summary=title)] + northwind_events(now)
+
+
+class NamedWithACompany(Fresh):
+    """"Ravi from TKS" in the captions: looked up at TKS with no click, also on a call whose guests are on personal email, and shown
+    in what the in-call panel polls (GET /api/mentions and GET /api/live-assist). Fake calendar and fake Claude only."""
+
+    def setUp(self):
+        mention_setup(self)
+        self.events = personal_call_events(datetime.now(timezone.utc))
+
+    def tearDown(self):
+        mention_teardown(self)
+
+    fake, by = MentionFlow.fake, MentionFlow.by
+
+    def ravi(self):
+        return self.fake(mention_reply([cand("Ravi Patel", "Program Director", RAVI_URL, why="Runs the pilot programs at TKS")], [RAVI_URL]))
+
+    def captions(self, text, cid="pc1", seg="capt1abc"):
+        st, body = S.mentions_live({"callId": cid, "segment": seg, "offset": 0, "text": text + "\n", "final": False, "pause": True, "source": "captions"})
+        self.assertEqual(st, 200, body)
+        return body
+
+    def queued(self):
+        with S.RQ_LOCK:
+            return [k for k, _ in S.RQ["queue"]]
+
+    def test_ravi_from_tks_on_a_personal_email_call_is_looked_up_with_no_click(self):
+        f = self.ravi()
+        polled, real = [], S.capture_auto_notes
+
+        def poll_first(*a, **k):  # the panel's poll lands while the caption is still being saved, before its lookup is queued
+            polled.append(self.by(S.mentions_body("pc1")))
+            return real(*a, **k)
+        S.capture_auto_notes = poll_first
+        try:
+            ravi = self.by(self.captions("Noah Reyes: I talked to Ravi from TKS about the pilot."))["Ravi"]
+        finally:
+            S.capture_auto_notes = real
+        self.assertEqual((ravi["role"], ravi["status"], ravi["note"]), ("at TKS", "pending", ""))  # TKS kept though the title says it
+        self.assertEqual(polled[0]["Ravi"]["status"], "pending")  # not "This call has no company web address"
+        S.mentions_body("pc1")
+        self.assertEqual(self.queued(), [S.mention_key("pc1", ravi["id"])])  # queued once
+        while S.research_step():
+            pass
+        self.assertEqual(len(f.calls), 1)
+        self.assertIn("Mentioned on the call: Ravi\nRole or team: (not said)\nCompany: TKS\nCompany website: tks.world",
+                      f.calls[0]["messages"][0]["content"])  # tks.world: the TKS guest's, from another call
+        for bit in ("about the pilot", "Noah", "gmail", "Team 5"):
+            self.assertNotIn(bit, json.dumps(f.calls, default=str))
+        # shown with no click: a first name stays "Likely, not confirmed" (never picked for you), with his title and source
+        body = S.mentions_body("pc1")
+        ravi = self.by(body)["Ravi"]
+        c = ravi["candidates"][0]
+        self.assertEqual((ravi["status"], ravi["likely"], c["name"], c["title"], c["companyHint"]), ("pick", True, "Ravi Patel", "Program Director", "TKS"))
+        self.assertEqual(c["sources"][0]["url"], RAVI_URL)
+        for assist in (body["assist"], S.live_assist_view("pc1")):
+            p = next(x for x in assist["items"] if x["kind"] == "person")
+            self.assertEqual((p["title"], p["status"], p["spokenName"]), ("Ravi Patel", "possible", "Ravi"))
+            self.assertIn("Program Director", p["detail"])
+
+    def test_a_full_name_with_a_company_is_found_and_shown_in_both_feeds(self):
+        self.ravi()
+        self.captions("Noah Reyes: Ravi Patel from TKS runs the pilot.")
+        while S.research_step():
+            pass
+        body = S.mentions_body("pc1")
+        r = self.by(body)["Ravi Patel"]
+        self.assertEqual((r["status"], r["autoFound"], r["role"]), ("found", True, "at TKS"))
+        self.assertEqual((r["person"]["name"], r["person"]["title"], r["person"]["companyHint"]), ("Ravi Patel", "Program Director", "TKS"))
+        for assist in (body["assist"], S.live_assist_view("pc1")):
+            p = next(x for x in assist["items"] if x["kind"] == "person")
+            self.assertEqual((p["title"], p["status"], p["detail"], p["profileUrl"]), ("Ravi Patel", "exact", "Program Director", RAVI_URL))
+
+    def test_on_a_company_call_tks_is_looked_up_as_tks_not_the_calls_company(self):
+        f = self.ravi()
+        ravi = self.by(self.captions("Marcus Bell: I talked to Ravi from TKS about the pilot.", cid="nw1"))["Ravi"]
+        self.assertEqual((ravi["role"], ravi["status"]), ("at TKS", "pending"))
+        self.assertEqual(self.queued(), [S.mention_key("nw1", ravi["id"])])
+        while S.research_step():
+            pass
+        sent = f.calls[0]["messages"][0]["content"]
+        self.assertIn("Company: TKS\nCompany website: tks.world", sent)
+        self.assertNotIn("orthwind", sent)
+        self.assertEqual(self.by(S.mentions_body("nw1"))["Ravi"]["candidates"][0]["name"], "Ravi Patel")
+
+    def test_automatic_look_up_off_web_research_off_or_no_key_queue_nothing(self):
+        f = self.ravi()
+        S.save_settings({"mentions": {"autoLookup": False}})
+        ravi = self.by(self.captions("Noah Reyes: I talked to Ravi from TKS about the pilot."))["Ravi"]
+        self.assertEqual((ravi["status"], ravi["note"]), ("nokey", S.AUTO_OFF_NOTE))
+        S.mentions_body("pc1")  # the panel's polls never queue it either
+        self.assertEqual((self.queued(), S.research_step(), f.calls), ([], None, []))
+        self.assertEqual(self.by(S.mentions_body("pc1"))["Ravi"]["status"], "nokey")
+        # Look up on the web (your own click) still goes, to TKS, on this call with no company web address
+        st, out = S.mention_action({"callId": "pc1", "id": ravi["id"], "action": "again"})
+        self.assertEqual((st, self.by(out)["Ravi"]["status"]), (200, "pending"), out)
+        self.assertEqual(self.queued(), [S.mention_key("pc1", ravi["id"])])
+        S.save_settings({"mentions": {"autoLookup": True}, "research": {"web": False}})
+        sam = self.by(self.captions("Noah Reyes: Sam from TKS joins too.", seg="capt2abc"))["Sam"]
+        self.assertEqual((sam["status"], sam["note"]), ("nokey", S.WEB_OFF_NOTE))
+        S.save_settings({"research": {"web": True}})
+        os.environ.pop("ANTHROPIC_API_KEY")
+        dana = self.by(self.captions("Noah Reyes: Dana from TKS signs.", seg="capt3abc"))["Dana"]
+        self.assertEqual(dana["status"], "nokey")
+        self.assertIn("Claude key", dana["note"])
+        S.mentions_body("pc1")
+        self.assertEqual(self.queued(), [S.mention_key("pc1", ravi["id"])])  # only your own click
+
+    def test_a_lone_first_name_a_guest_and_a_team_with_no_company_are_not_looked_up(self):
+        f = self.ravi()
+        body = self.captions("Noah Reyes: I talked to Ravi about the pilot. Lena from TKS was there. Kenji from security asked too.")
+        self.assertEqual([(i["name"], i["role"], i["status"]) for i in body["items"]], [("Kenji", "security", "notfound")])  # Lena is a guest
+        self.assertIn("no company web address", self.by(body)["Kenji"]["note"])  # a team, but no company to look it up at
+        # the live AI pass's lone first name (no company, no role) is listed, never looked up
+        ctx = S._call_context("pc1", S.load_records(), datetime.now(timezone.utc), live=True)[1]
+        S.save_mentions("pc1", ctx, [{"key": "p:ravi|", "name": "Ravi", "role": "", "kind": "partial", "count": 1, "si": None, "said": None,
+                                      "quote": {"text": "I talked to Ravi about the pilot.", "speaker": "Noah Reyes", "time": ""}, "noLookup": True, "aiFound": True}],
+                        "captions", [], bump=False)
+        self.assertEqual(self.by(S.mentions_body("pc1"))["Ravi"]["status"], "nokey")  # a poll settles and requeues what it may
+        self.assertEqual((self.queued(), S.research_step(), f.calls), ([], None, []))
+
+    def test_a_failed_lookup_shows_the_failure_not_the_calls_missing_website(self):
+        self.fake(RateLimitError("busy"))
+        self.captions("Noah Reyes: I talked to Ravi from TKS about the pilot.")
+        S.research_step()
+        r = self.by(S.mentions_body("pc1"))["Ravi"]
+        self.assertEqual(r["status"], "error")
+        self.assertIn("Couldn't look them up", r["note"])
+        self.assertEqual(self.queued(), [])
+
+    def test_the_live_ai_pass_finds_tkss_ravi_and_he_is_looked_up_at_tks(self):
+        f = self.ravi()
+        payload = {"items": [], "entities": [
+            {"kind": "person", "utteranceId": "u1", "spoken": "Ravi", "name": "Ravi", "company": "TKS", "role": "", "why": "Runs the pilot", "about": "", "importance": 3},
+            {"kind": "person", "utteranceId": "u1", "spoken": "Noah", "name": "Noah Reyes", "company": "TKS", "role": "", "why": "", "about": "", "importance": 3}]}
+        asked = []
+        S.claude_text = lambda system, content, max_tokens, timeout, retries=1: (asked.append(content), (200, {"text": json.dumps(payload)}))[1]
+        words = "TKS's Ravi is running the pilot, Noah said."
+        st, body = S.mentions_live({"callId": "pc1", "segment": "capt9abc", "offset": 0, "text": "Lena Park: " + words + "\n", "final": False, "pause": True,
+                                    "source": "captions", "utterances": [{"id": "u1", "text": words, "speaker": "Lena Park", "time": "0:05", "final": True}]})
+        self.assertEqual((st, body.get("items")), (200, []))  # the rules don't read "TKS's Ravi"
+        S.live_semantic_step("pc1")
+        self.assertEqual(len(asked), 1)  # one AI pass for the batch
+        items = S.mentions_body("pc1")["items"]
+        self.assertEqual([(i["name"], i["role"], i["status"]) for i in items], [("Ravi", "at TKS", "pending")])  # Noah is a guest
+        while S.research_step():
+            pass
+        self.assertEqual(len(f.calls), 1)
+        self.assertIn("Company: TKS\nCompany website: tks.world", f.calls[0]["messages"][0]["content"])
+        self.assertEqual(self.by(S.mentions_body("pc1"))["Ravi"]["candidates"][0]["title"], "Program Director")
 
 
 if __name__ == "__main__":

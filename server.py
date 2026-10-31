@@ -698,8 +698,8 @@ def domain_of(email):
 
 
 def name_from_email(email):
-    """A readable name from the address when the calendar has none: 'ayaan.hussain4101@gmail.com' -> 'Ayaan Hussain',
-    'shlokparekh112@gmail.com' -> 'Shlokparekh'. Trailing digits and a +tag go; . _ - split the words. A run-together name stays
+    """A readable name from the address when the calendar has none: 'lena.park4101@gmail.com' -> 'Lena Park',
+    'rohanmehta112@gmail.com' -> 'Rohanmehta'. Trailing digits and a +tag go; . _ - split the words. A run-together name stays
     one word (no split is guessed), and a username that still has digits in it isn't a name, so the address itself shows."""
     local = str(email).split("@")[0].split("+")[0]
     parts = [p for p in (re.sub(r"\d+$", "", w) for w in re.split(r"[._\-]+", local)) if p]
@@ -989,12 +989,82 @@ def same_org(d1, d2, records):
 
 RECENT_HOURS = 48  # a call that ended this recently still counts for invitee research and alerts
 PAST_DAYS = 30     # ended calls stay on the Calls calendar this long, so you can open their notes (no new research for them)
+TRASH_DAYS = 30    # a deleted call waits in Settings > Deleted meetings this long, then what Overture saved for it is erased
 
 
 def hidden_calls(records):
-    """Calls you removed from Overture (Remove on a call): call id -> when. Google Calendar itself is never changed."""
+    """Calls you deleted from Overture (Delete on a call): call id -> {"at": when, plus the call's title, company, when and start, so
+    Settings > Deleted meetings can name it after it leaves the calendar's window} (only the time for one deleted before that list).
+    "erased" (a time) once what Overture saved for it is gone: the id stays, so the event on your calendar never brings the call back.
+    Google Calendar itself is never changed."""
     h = records.get("hiddenCalls")
     return h if isinstance(h, dict) else {}
+
+
+def _deleted_at(v):
+    return parse_dt(v.get("at") if isinstance(v, dict) else v)
+
+
+def _erased(v):
+    return isinstance(v, dict) and bool(v.get("erased"))
+
+
+def deleted_calls(records, in_window, now):
+    """Settings > Deleted meetings: the calls waiting there, the last one deleted first, each with the day it will be erased.
+    in_window: the deleted calls still in the calendar's window (upcoming_invites' removed), whose details are the freshest."""
+    fresh, out = {c["id"]: c for c in in_window}, []
+    for cid, v in hidden_calls(records).items():
+        at = _deleted_at(v)
+        if _erased(v) or not at or at <= now - timedelta(days=TRASH_DAYS):
+            continue
+        saved = v if isinstance(v, dict) else {}
+        c = fresh.get(cid) or {k: str(saved.get(k) or "") for k in ("title", "company", "when", "start")}
+        out.append(dict(c, id=cid, deletedAt=at.isoformat(), eraseOn=(at + timedelta(days=TRASH_DAYS)).isoformat()))
+    return sorted(out, key=lambda c: c["deletedAt"], reverse=True)
+
+
+def erase_call(r, call_id):
+    """Erase what Overture saved for one deleted call (inside the records lock): your notes and the automatic ones, the people and
+    companies mentioned on it with their research and map lines, after-call updates, its Granola note and HubSpot save. People you
+    added to your records from it stay: they are yours, not the call's. Only the id is kept (see hidden_calls)."""
+    block = (r.get("mentions") or {}).pop(call_id, None) or {}
+    gone = r.get("connectionsRemoved") or {}
+    for kind, items in (("person", block.get("items")), ("company", block.get("orgs"))):
+        for it in items if isinstance(items, list) else []:
+            if isinstance(it, dict):
+                gone.pop(connection_id(call_id, kind, str(it.get("key") or it.get("id") or "")), None)
+    r["connections"] = {k: v for k, v in (r.get("connections") or {}).items() if not (isinstance(v, dict) and v.get("callId") == call_id)}
+    for k in ("callNotes", "updates", "granola", "hubspotSaved"):
+        if isinstance(r.get(k), dict):
+            r[k].pop(call_id, None)
+    at = _deleted_at(hidden_calls(r).get(call_id))
+    r["hiddenCalls"][call_id] = {"at": at.isoformat() if at else now_iso(), "erased": now_iso()}
+
+
+def forget_call(call_id):
+    """An erased call's live captions this server still holds in memory (waiting for the AI pass, or a caption segment) go too."""
+    with SEMANTIC_LOCK:
+        SEMANTIC_STATE.pop(call_id, None)
+    with LIVE_LOCK:
+        for k in [k for k in LIVE_SEGMENTS.keys() if k[0] == call_id]:
+            LIVE_SEGMENTS.pop(k, None)
+
+
+def erase_expired_calls(records, now):
+    """Calls deleted TRASH_DAYS ago or more are erased (on the first visit after that). Returns the records to show."""
+    due = lambda r: [cid for cid, v in hidden_calls(r).items() if not _erased(v) and (_deleted_at(v) or now) <= now - timedelta(days=TRASH_DAYS)]
+    if not due(records):
+        return records
+    with RECORDS_LOCK:
+        r = load_records()
+        ids = due(r)
+        for cid in ids:
+            erase_call(r, cid)
+        if ids:
+            save_json(records_path(), r)
+    for cid in ids:
+        forget_call(cid)
+    return r if ids else records
 
 
 def upcoming_invites(events, me_email, records, now, removed=None):
@@ -1032,7 +1102,8 @@ def build_live(events, me, records, now=None, meta_out=None, crm=None):
     me = me or {}
     me_email = str(me.get("email", "")).lower()
     today_et = to_et(now).date()
-    removed = []  # calls you removed from Overture: left out of every page, listed on the Data page to put back
+    removed = []  # calls you deleted: left out of every page, listed in Settings > Deleted meetings to put back
+    records = erase_expired_calls(records, now)
     invites = upcoming_invites(events, me_email, records, now, removed)
     crm = crm or {}
     hs_cos, hs_people = crm.get("companies") or {}, crm.get("contacts") or {}
@@ -1172,7 +1243,9 @@ def build_live(events, me, records, now=None, meta_out=None, crm=None):
 
     live = {
         "today": today_et.isoformat(), "me": {"email": me_email, "name": str(me.get("name", ""))},
-        "invites": invites, "hiddenCalls": removed, "people": people, "companies": companies, "companyDomains": company_domains,
+        "invites": invites, "hiddenCalls": deleted_calls(records, removed, now), "people": people,
+        "companies": companies, "companyDomains": company_domains,
+        "erasedCalls": [cid for cid, v in hidden_calls(records).items() if _erased(v)],  # this browser's copies of their notes go too
         "papers": {}, "currentSecurityPack": "", "relationships": [], "mentioned": [], "watch": watch,
         "settings": {"gongInAI": gong_in_ai(records), "gongTranscripts": setting_on(records, "gongTranscripts"),
                      "transcriptsInAI": setting_on(records, "transcriptsInAI")},
@@ -1394,18 +1467,28 @@ def clean_apply(body):
     return {"callId": cid, "company": company, "accept": lists["accept"], "undo": lists["undo"]}
 
 
-MAX_HIDDEN_CALLS = 500  # removed calls kept per account; the oldest is dropped first
+MAX_HIDDEN_CALLS = 500  # deleted calls kept per account; erased ones are dropped first, then the oldest
 
 
 def clean_hide_call(body):
-    """POST /api/calls/hide: {callId, hidden: true} takes a call off Overture's pages, hidden: false puts it back."""
-    _only(body, {"callId", "hidden"})
+    """POST /api/calls/hide: {callId, hidden: true, title, company, when, start} moves a call to Settings > Deleted meetings (with what
+    the call was, so the list can name it after it leaves the calendar's window); hidden: false puts it back."""
+    _only(body, {"callId", "hidden", "title", "company", "when", "start"})
     cid = _str(body, "callId", 200, True)
     if not CALLID_RE.match(cid):
         raise Invalid("callId doesn't look right")
     if not isinstance(body.get("hidden"), bool):
         raise Invalid("hidden must be true or false")
-    return {"callId": cid, "hidden": body["hidden"]}
+    return {"callId": cid, "hidden": body["hidden"], "call": {k: clean_text(_str(body, k, 300) or "", 300) for k in ("title", "company", "when", "start")}}
+
+
+def clean_erase_call(body):
+    """POST /api/calls/erase: {callId} erases a call in Settings > Deleted meetings now, not TRASH_DAYS after you deleted it."""
+    _only(body, {"callId"})
+    cid = _str(body, "callId", 200, True)
+    if not CALLID_RE.match(cid):
+        raise Invalid("callId doesn't look right")
+    return {"callId": cid}
 
 
 SETTINGS = ("gongInAI", "gongTranscripts", "transcriptsInAI")  # all off unless you turn them on (Data page)
@@ -1428,7 +1511,7 @@ def now_iso():
 def write_records(kind, body):
     """Validate, merge and save one change. Returns the saved part."""
     cleaners = {"company": clean_company, "person": clean_person, "call-notes": clean_call_notes, "apply": clean_apply, "settings": clean_settings,
-                "hide-call": clean_hide_call}
+                "hide-call": clean_hide_call, "erase-call": clean_erase_call}
     if kind not in cleaners:
         raise Invalid("unknown record type")
     c = cleaners[kind](body)
@@ -1473,12 +1556,21 @@ def write_records(kind, body):
         elif kind == "hide-call":
             # Only Overture's own list changes: the Google Calendar event is never deleted or edited.
             hidden = r["hiddenCalls"]
-            hidden.pop(c["callId"], None)
+            was = hidden.pop(c["callId"], None)
+            if _erased(was) and not c["hidden"]:  # nothing is left to put back (and nothing is saved: this raises before save)
+                raise Invalid("That meeting was deleted for good, so it can't be restored.")
             if c["hidden"]:
-                hidden[c["callId"]] = now_iso()
-                for old in list(hidden)[:-MAX_HIDDEN_CALLS]:  # oldest first (a dict keeps the order they were added in)
+                hidden[c["callId"]] = was if _erased(was) else dict(c["call"], at=now_iso())
+                order = sorted(hidden, key=lambda k: not _erased(hidden[k]))  # erased first, then the oldest (a dict keeps the order they were added in)
+                for old in order[:max(0, len(hidden) - MAX_HIDDEN_CALLS)]:
                     del hidden[old]
             out = {"callId": c["callId"], "hidden": c["hidden"]}
+        elif kind == "erase-call":
+            if c["callId"] not in r["hiddenCalls"]:
+                raise Invalid("That meeting isn't in Deleted meetings.")
+            if not _erased(r["hiddenCalls"][c["callId"]]):
+                erase_call(r, c["callId"])
+            out = {"callId": c["callId"], "erased": True}
         else:
             items = r["updates"].setdefault(c["callId"], [])
             drop = {(u["kind"], u["text"]) for u in c["undo"]}
@@ -1493,6 +1585,8 @@ def write_records(kind, body):
         if len(json.dumps(r)) > MAX_RECORDS_BYTES:
             raise Invalid("the records store is full")
         save_json(records_path(), r)
+    if kind == "erase-call":
+        forget_call(c["callId"])
     return out
 
 
@@ -4189,6 +4283,8 @@ def _title_matches(role, title):
 def mention_context(events, me, records, call_id, now=None, hs_contacts=None):
     """What extraction needs about one call: its company, guests, you, and the people Overture already knows there. None if the call isn't found."""
     now = now or datetime.now(timezone.utc)
+    if call_id in hidden_calls(records):  # deleted (Settings > Deleted meetings) or erased: Overture adds nothing to it
+        return None
     me_email = str((me or {}).get("email", "")).lower()
     inv = next((i for i in upcoming_invites(events, me_email, records, now) if i["id"] == call_id), None)
     if not inv:  # a call that already happened
@@ -4263,6 +4359,9 @@ def extract_mentions(lines, ctx, hints=None):
         known_first.setdefault(norm_name(k["name"]).split()[0], []).append(k)
     found = {}
     cur = {"si": -1}  # which sentence of the whole transcript we're in (for the follow-up that may explain a relation)
+    # "Maria from <the call's company>" is someone at the call's company. A call with no company web address (guests on personal
+    # email) has none: its title is only a label, so "Ravi from TKS" on "TKS team sync" keeps TKS as his company.
+    own_words = ctx["companyWords"] if ctx.get("domain") else set()
 
     def note(key, name, role, kind, line, sent, a, b):
         it = found.get(key)
@@ -4318,7 +4417,7 @@ def extract_mentions(lines, ctx, hints=None):
                         # An explicit different company must survive even for a full name.
                         if (rx is FROM_RE and not code and inside[2] in found and not re.fullmatch(TEAM, role)
                                 and not any(w.lower() in NONPERSON or w.lower() in STARTWORDS for w in role.split())
-                                and not any(w.lower() in ctx["companyWords"] for w in role.split())
+                                and not any(w.lower() in own_words for w in role.split())
                                 and not TEAM_AFTER_RE.match(sent, m.end(ri))):
                             found[inside[2]]["role"] = "at " + role
                             found[inside[2]]["kind"] = "full"
@@ -4335,7 +4434,7 @@ def extract_mentions(lines, ctx, hints=None):
                         if TEAM_AFTER_RE.match(sent, m.end(3)) and role not in (ctx.get("orgs") or {}):
                             role = ""  # "Maria from the Falcon team": a team's own name, not a company, so it isn't sent
                         else:
-                            role = "" if any(w.lower() in ctx["companyWords"] for w in role.split()) else "at " + role
+                            role = "" if any(w.lower() in own_words for w in role.split()) else "at " + role
                             if sent[m.end(3):m.end(3) + 1] not in ("'", "’"):  # "Sarah at Goldman Sachs": the company isn't a person too
                                 for s, e, k in taken:                       # (but "Tom from Jordan Lee's team" keeps Jordan Lee)
                                     if m.start(3) <= s < m.end(3) and k.startswith("n:") and k in found and found[k]["kind"] == "full" and found[k]["count"] == 1:
@@ -4498,13 +4597,12 @@ def known_orgs(events, records, own_domain, me_email):
         if isinstance(c, dict):
             put(str(name), str(c.get("domain") or "").lower())
     mine = domain_of(me_email)
-    for ev in events or []:
-        for a in ev.get("attendees") or []:
-            d = domain_of(str(a.get("email", "")).lower())
-            if d and not personal_domain(d) and not (mine and same_org(d, mine, records)):
-                co = company_for_domain(d, records)
-                if co:
-                    put(co, d)
+    # each guest domain once (a calendar has the same few companies on many events): mentions resolve a company with this too
+    for d in dict.fromkeys(domain_of(str(a.get("email", "")).lower()) for ev in events or [] for a in ev.get("attendees") or []):
+        if d and not personal_domain(d) and not (mine and same_org(d, mine, records)):
+            co = company_for_domain(d, records)
+            if co:
+                put(co, d)
     with CRM_LOCK:
         hs = [v[1] for k, v in CRM_CACHE.items() if isinstance(k, tuple) and k[:2] == ("hubspot", "company") and isinstance(v[1], dict)]
         hs_keys = [k[2] for k, v in CRM_CACHE.items() if isinstance(k, tuple) and k[:2] == ("hubspot", "company") and isinstance(v[1], dict)]
@@ -5440,6 +5538,22 @@ def do_mention_lookup(job, now=None):
     update_mention(job["callId"], job["id"], apply)
 
 
+def _named_org_domains(hint, records):
+    """The websites Overture already knows for a company said with a person ("Ravi from TKS"): the adopters list, well-known
+    vendors, Overture records (companies and company research) and HubSpot, and the companies of your calendar's guests from
+    any call (tks.world for "TKS"). The calendar is the copy last read from Google: nothing is fetched here."""
+    want = norm_org(hint)
+    with CACHE_LOCK:
+        events = CACHE["events"] or []
+    orgs = known_orgs(events, records, "", str((token_info() or {}).get("email", "")).lower())
+    domains = {str(o.get("domain") or "").lower() for name, o in orgs.items() if want and want in (norm_org(name), norm_org(o.get("name", "")))}
+    for d, o in (records.get("orgs") or {}).items():  # company research saved for a call's company: "The Knowledge Society (TKS)"
+        names = [str(o.get("name") or ""), str((o.get("profile") or {}).get("name") or "")] if isinstance(o, dict) else []
+        if want and any(want == norm_org(v) for n in names if n for v in {n} | _org_variants(n)):
+            domains.add(str(d).lower())
+    return {d for d in domains if DOMAIN_RE.fullmatch(d) and not personal_domain(d)}
+
+
 def person_mention_scope(block, it, records):
     """Resolve known company domains, or keep an explicit company-name-only public lookup.
     Unknown/ambiguous aliases never inherit the call account and never invent a domain.
@@ -5451,10 +5565,7 @@ def person_mention_scope(block, it, records):
         return {"company": block.get("company", ""), "domain": block.get("domain", ""), "role": role, "error": "", "nameOnly": False}
     domain = str(it.get("mentionedDomain") or "").lower()
     if not domain:
-        orgs = known_orgs([], records, "", "")
-        domains = {str(o.get("domain") or "").lower() for name, o in orgs.items()
-                   if norm_org(name) == norm_org(hint) or norm_org(o.get("name", "")) == norm_org(hint)}
-        domains = {d for d in domains if DOMAIN_RE.fullmatch(d) and not personal_domain(d)}
+        domains = _named_org_domains(hint, records)
         if len(domains) == 1:
             domain = next(iter(domains))
     error = ""
@@ -5501,6 +5612,16 @@ def lookup_blocker(block, auto=False, records=None, allow_name_only=False):
     if auto and not mention_settings(records)["autoLookup"]:
         return AUTO_OFF_NOTE
     return ""
+
+
+def person_lookup_blocker(block, it, records, auto=None):
+    """lookup_blocker for one person mention, on the company they were named with ("Ravi from TKS": TKS's website, or TKS's
+    name alone when no website is known) and else the call's, as save_mentions decides it when they are first heard. So a call
+    with no company web address (guests on personal email) never stops the lookup of someone named with a company.
+    auto (default: found while the call runs) follows Settings > Mentions > automatic look-up."""
+    auto = it.get("source") in AUTO_SOURCES if auto is None else auto
+    scope = person_mention_scope(block, it, records)
+    return scope["error"] or lookup_blocker({"company": scope["company"], "domain": scope["domain"]}, auto, records, allow_name_only=scope["nameOnly"])
 
 
 def blocked_status(blocker, org=False):
@@ -5796,8 +5917,9 @@ def _semantic_call(ctx):
     inv = ctx.get("invite") or {}
     bare = lambda n: str(n or "").split("@")[0]  # a guest named by their address (no name on the invite): never send the address
     guests = [bare(a.get("name", "")) for a in inv.get("attendees") or [] if isinstance(a, dict) and a.get("name")]
-    return {"title": clean_text(inv.get("title"), 160), "company": ctx.get("company", ""),
-            "companies": [c for c in [ctx.get("company", "")] + list(ctx.get("orgs") or {})[:150] if c],
+    own = ctx.get("company", "") if ctx.get("domain") else ""  # no company web address (personal email): the title is only a label
+    return {"title": clean_text(inv.get("title"), 160), "company": own,
+            "companies": [c for c in [own] + list(ctx.get("orgs") or {})[:150] if c],
             "people": [k.get("name", "") for k in (ctx.get("known") or [])[:100] if isinstance(k, dict) and k.get("name")],
             "skip": guests + sorted(ctx.get("me") or []),
             "participants": [{"id": "you", "name": "You"}]
@@ -5807,7 +5929,7 @@ def _semantic_call(ctx):
 def _closest_org(name, ctx):
     """A company the captions may have misheard ("DKS" for TKS): when Overture knows no company by the name as heard but knows
     exactly one a letter or two away, that one. Returns (the name to use, what was heard, or "" when nothing changed)."""
-    n, known = _letters(norm_org(name)), [c for c in [ctx.get("company", "")] + list(ctx.get("orgs") or {}) if c]
+    n, known = _letters(norm_org(name)), [c for c in [ctx.get("company", "") if ctx.get("domain") else ""] + list(ctx.get("orgs") or {}) if c]
     if not n or any(_letters(norm_org(c)) == n for c in known):
         return name, ""
     near = {c for c in known if (k := _letters(norm_org(c))) and abs(len(k) - len(n)) <= 2
@@ -5844,7 +5966,7 @@ def _save_ai_mentions(call_id, ctx, heard, source="captions"):
     known_first = {}
     for k in known_full.values():
         known_first.setdefault(norm_name(k["name"]).split()[0], []).append(k)
-    own = norm_org(ctx.get("company") or "")
+    own = norm_org(ctx.get("company") or "") if ctx.get("domain") else ""  # no company web address: the title is only a label
     misheard = []  # (speaker, time, the words as heard): the rules' own mention of those words is taken back
     for e in heard:
         text = e["quote"]["text"]
@@ -5874,7 +5996,7 @@ def _save_ai_mentions(call_id, ctx, heard, source="captions"):
                 people.append({"key": "n:" + nn, "name": e["name"], "role": ("at " + company) if company else role, "kind": "full", "count": 1,
                                "quote": dict(e["quote"]), "si": None, "said": None, **brief})
             else:
-                people.append({"key": "p:" + words[0] + "|" + (role.lower() if not company else ""), "name": e["name"], "role": ("at " + company) if company else role,
+                people.append({"key": "p:" + words[0] + "|" + (("at " + company) if company else role).lower(), "name": e["name"], "role": ("at " + company) if company else role,
                                "kind": "partial", "count": 1, "quote": dict(e["quote"]), "si": None, "said": None, "noLookup": not company and not role, **brief})
         else:
             if not _org_ok(e["name"], ctx, set(known_full)):
@@ -5984,14 +6106,14 @@ def mentions_body(call_id, met=None, requeue=True):
     block = (records.get("mentions") or {}).get(call_id) or {}
     items = block.get("items") or []
     blockers = {auto: lookup_blocker(block, auto) for auto in (False, True)} if requeue else {}
+    for it in items if requeue else []:
+        if it.get("status") == "pending":
+            key = mention_key(call_id, it["id"])
+            with RQ_LOCK:
+                waiting = key in RQ["pending"] or key in RQ["running"] or key in RQ["errors"]
+            if not waiting and not person_lookup_blocker(block, it, records):  # on the company they were named with, not only the call's
+                queue_mention(call_id, block, it)
     if requeue and not blockers[False]:
-        for it in items:
-            if it.get("status") == "pending" and not blockers[it.get("source") in AUTO_SOURCES]:
-                key = mention_key(call_id, it["id"])
-                with RQ_LOCK:
-                    waiting = key in RQ["pending"] or key in RQ["running"] or key in RQ["errors"]
-                if not waiting:
-                    queue_mention(call_id, block, it)
         for it in block.get("orgs") or []:
             if it.get("status") == "pending" and not blockers[it.get("source") in AUTO_SOURCES]:
                 key = "org:" + call_id + ":" + it["id"]
@@ -6011,16 +6133,19 @@ def mentions_body(call_id, met=None, requeue=True):
 def settle_blocked(call_id):
     """Lookups left "Looking up…" that can't run now (web research turned off, the key removed, or automatic look-up turned off
     for one found during the call) and aren't queued show "Not looked up" instead, so nothing spins for ever. They can be looked
-    up again once it is allowed."""
-    block = (load_records().get("mentions") or {}).get(call_id) or {}
-    blockers = {auto: lookup_blocker(block, auto) for auto in (False, True)} if block else {}
-    if not blockers.get(True):  # automatic look-up adds a reason, never takes one away: nothing is blocked
-        return 0
+    up again once it is allowed. A person is judged on the company they were named with (person_lookup_blocker), never only on
+    the call's: "Ravi from TKS", just heard on a call with guests on personal email and about to be queued, keeps looking up."""
+    records = load_records()
+    block = (records.get("mentions") or {}).get(call_id) or {}
     with RQ_LOCK:
         busy = RQ["pending"] | RQ["running"]
-    todo = [(k, it["id"], blockers[it.get("source") in AUTO_SOURCES]) for k in ("items", "orgs") for it in block.get(k) or []
-            if isinstance(it, dict) and it.get("status") == "pending" and blockers[it.get("source") in AUTO_SOURCES]
-            and (mention_key(call_id, it["id"]) if k == "items" else "org:" + call_id + ":" + it["id"]) not in busy]
+    waiting = [(k, it) for k in ("items", "orgs") for it in block.get(k) or []
+               if isinstance(it, dict) and it.get("status") == "pending"
+               and (mention_key(call_id, it["id"]) if k == "items" else "org:" + call_id + ":" + it["id"]) not in busy]
+    blockers = {auto: lookup_blocker(block, auto) for auto in (False, True)} if waiting else {}
+    todo = [(k, it["id"], person_lookup_blocker(block, it, records) if k == "items" else blockers[it.get("source") in AUTO_SOURCES])
+            for k, it in waiting]
+    todo = [t for t in todo if t[2]]
     for k, mid, blocker in todo:
         fn = update_mention if k == "items" else update_org
         fn(call_id, mid, lambda it, _r: it.update(status=blocked_status(blocker, k == "orgs"), note=blocker) if it.get("status") == "pending" else None)
@@ -6172,8 +6297,8 @@ def _guests(ctx):
 
 
 def _guest(speaker, ctx):
-    """The calendar guest a speaker is: the same name, a unique first name, or the name Meet shows ("Shlok Parekh") against the one
-    the calendar made from an email address ("Shlokparekh112"). With one guest, anyone who isn't you is them. None if Overture can't tell."""
+    """The calendar guest a speaker is: the same name, a unique first name, or the name Meet shows ("Rohan Mehta") against the one
+    the calendar made from an email address ("Rohanmehta112"). With one guest, anyone who isn't you is them. None if Overture can't tell."""
     atts, n = _guests(ctx), norm_name(speaker)
     if not n or not atts:
         return None
@@ -6190,7 +6315,7 @@ def _guest(speaker, ctx):
 
 
 def _guest_named(word, guests):
-    """The one guest whose first name is this word, or whose calendar name made from an email ("Shlokparekh112") starts with it."""
+    """The one guest whose first name is this word, or whose calendar name made from an email ("Rohanmehta112") starts with it."""
     w = _letters(word)
     hits = [a for a in guests if norm_name(a.get("name", "")).split()[:1] == [word]
             or (len(w) >= 4 and len(norm_name(a.get("name", "")).split()) == 1 and _letters(a.get("name", "")).startswith(w))]
@@ -6761,7 +6886,7 @@ def mention_action(body):
         if not it:
             return 404, {"error": "That mention isn't saved any more."}
         if action == "again":
-            blocker = lookup_blocker(block)
+            blocker = person_lookup_blocker(block, it, load_records(), auto=False)  # "Ravi from TKS": TKS's, even when the call has no company
             if blocker:
                 return (503, {"error": "no-key"}) if blocker.startswith("Add a Claude") else (400, {"error": blocker})
             if it.get("status") not in ("notfound", "pending", "pick", "nokey") and not it.get("autoFound"):
@@ -7329,7 +7454,7 @@ def granola_step(now=None):
         if not end or not now - timedelta(seconds=GRANOLA_WINDOW) <= end <= now - timedelta(seconds=GRANOLA_AFTER):
             continue
         inv = event_to_invite(ev, me_email, records)
-        if not inv:
+        if not inv or inv["id"] in hidden_calls(records):  # a deleted call gets no Granola note
             continue
         g = (records.get("granola") or {}).get(inv["id"]) or {}
         tried = parse_dt(g.get("tried"))
@@ -7676,8 +7801,10 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(200, dict(claude_key_state(), ok=True))
         if path == "/api/records/apply":
             return self.handle_write("apply")
-        if path == "/api/calls/hide":  # remove a call from Overture (or put it back): the same guards as every records write
+        if path == "/api/calls/hide":  # delete a call from Overture (or put it back): the same guards as every records write
             return self.handle_write("hide-call")
+        if path == "/api/calls/erase":  # erase a deleted call now (Settings > Deleted meetings)
+            return self.handle_write("erase-call")
         if path == "/auth/google/disconnect":
             if not write_guard_ok(self.headers):
                 return self.send_json(403, {"error": "not allowed"})

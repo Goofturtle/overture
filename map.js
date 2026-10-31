@@ -85,15 +85,36 @@
     const width = x - FRAME.gapX;
     const bottom = Math.max(...frames.map((f) => f.y + f.h));
     pos.you = { x: width / 2, y: 40 };
-    // Past employers sit under the people who came from them, spread so they never overlap.
+    // Past employers and companies mentioned on a call sit in one row under the people who link to them.
     const pasts = graph.nodes.filter((n) => n.type === "past").map((n) => {
-      const linked = graph.edges.filter((e) => (e.a === n.id || e.b === n.id) && (pos[e.a] || pos[e.b]) && e.a !== "you" && e.b !== "you")
-        .map((e) => pos[e.a === n.id ? e.b : e.a]).filter(Boolean);
-      return { n, x: linked.length ? linked.reduce((s, p) => s + p.x, 0) / linked.length : width / 2 };
-    }).sort((a, b) => a.x - b.x);
-    const minGap = SIZE.past[0] + 40;
-    pasts.forEach((p, i) => { if (i && p.x - pasts[i - 1].x < minGap) p.x = pasts[i - 1].x + minGap; });
-    pasts.forEach((p) => { pos[p.n.id] = { x: p.x, y: bottom + 130 }; });
+      const ends = graph.edges.filter((e) => e.a === n.id || e.b === n.id).map((e) => (e.a === n.id ? e.b : e.a));
+      const linked = ends.filter((id) => id !== "you" && pos[id]).map((id) => pos[id]);
+      return { n, mine: !linked.length && ends.includes("you"), x: linked.length ? linked.reduce((s, p) => s + p.x, 0) / linked.length : null };
+    });
+    // One only you link to sits under the gap between frames nearest you, so its line drops straight down that gap (of two
+    // gaps as near, the side with fewer cards). One with no line sits under the frame of the call it came up on, after the rest.
+    const gaps = frames.length > 1 ? frames.slice(1).map((f, i) => (frames[i].x + frames[i].w + f.x) / 2) : [frames[0].x - 30, frames[0].x + frames[0].w + 30];
+    const crowd = (g) => pasts.filter((p) => p.x !== null && (p.x < pos.you.x) === (g < pos.you.x)).length;
+    const youGap = gaps.slice().sort((a, b) => Math.abs(a - pos.you.x) - Math.abs(b - pos.you.x) || crowd(a) - crowd(b))[0];
+    pasts.forEach((p) => {
+      if (p.x !== null) return;
+      const f = !p.mine && frames.find((fr) => (fr.node.calls || [fr.node.callId]).includes(p.n.mentioned));
+      p.x = f ? f.x + f.w / 2 : youGap;
+      p.late = !p.mine;
+    });
+    pasts.sort((a, b) => a.x - b.x || !!a.late - !!b.late);
+    // Spread so they never overlap: cards that would touch join one run, and each run centres on where its cards want to be.
+    const minGap = SIZE.past[0] + 40, runs = [];
+    pasts.forEach((p) => {
+      let r = { list: [p], c: p.x };
+      for (let q = runs[runs.length - 1]; q && r.c - q.c < ((q.list.length + r.list.length) * minGap) / 2; q = runs[runs.length - 1]) {
+        runs.pop();
+        r = { list: q.list.concat(r.list) };
+        r.c = r.list.reduce((s, o) => s + o.x, 0) / r.list.length;
+      }
+      runs.push(r);
+    });
+    runs.forEach((r) => r.list.forEach((p, i) => { pos[p.n.id] = { x: r.c + (i - (r.list.length - 1) / 2) * minGap, y: bottom + 130 }; }));
     return { pos, frames };
   }
 
@@ -127,9 +148,40 @@
   }
   // Two side exits: meet in the middle if they face each other, else loop round the outside.
   function sideRoute(A, B, lane) {
-    if (A.nx === -B.nx && A.nx * (B.x - A.x) > 0) { const mx = (A.x + B.x) / 2 + (lane || 0); return [A, { x: mx, y: A.y }, { x: mx, y: B.y }, B]; }
+    if (A.nx === -B.nx && A.nx * (B.x - A.x) > 0) {
+      // Cards only a few pixels off the same row: one straight line between them, not a tiny step, at the height of the left
+      // card (where its other lines leave too, so they run as one).
+      if (Math.abs(A.y - B.y) < 10) { const y = (A.nx > 0 ? A : B).y; return [{ x: A.x, y }, { x: B.x, y }]; }
+      const mx = (A.x + B.x) / 2 + (lane || 0); return [A, { x: mx, y: A.y }, { x: mx, y: B.y }, B];
+    }
     const x = A.nx > 0 ? Math.max(A.x, B.x) + 28 : Math.min(A.x, B.x) - 28;
     return [A, { x, y: A.y }, { x, y: B.y }, B];
+  }
+  // Two straight stretches of line on top of each other: both across or both down, on one line, overlapping by over a pixel.
+  function onTop(a, b, c, d) {
+    const v = Math.abs(a.x - b.x) < 0.5;
+    if (v !== (Math.abs(c.x - d.x) < 0.5)) return false;
+    const k = v ? "y" : "x", o = v ? "x" : "y";
+    return Math.abs(a[o] - c[o]) < 0.5 && Math.min(Math.max(a[k], b[k]), Math.max(c[k], d[k])) - Math.max(Math.min(a[k], b[k]), Math.min(c[k], d[k])) > 1;
+  }
+  const labelW = (t) => String(t).length * 6.2 + 16; // a line label's width at 12px, near enough
+  // Where line i's label goes: on a stretch of it that no other of these lines runs along, so two labels never share one line.
+  // In the middle of the longest such stretch the label fits on; else on the longest one: its middle, or, when one end is at a
+  // card, its other end if the label clears the card from there. null means no such place (the caller uses its default).
+  function labelSpot(lines, i, w) {
+    const pts = lines[i];
+    let best = null, fit = null;
+    for (let k = 1; k < pts.length; k++) {
+      const a = pts[k - 1], b = pts[k], len = Math.abs(b.x - a.x) + Math.abs(b.y - a.y);
+      if (lines.some((o, j) => j !== i && o.some((c, m) => m > 0 && onTop(a, b, o[m - 1], c)))) continue;
+      const s = { a, b, k, len };
+      if (!best || len > best.len) best = s;
+      if ((Math.abs(a.x - b.x) < 0.5 ? len >= 46 : len >= w + 24) && (!fit || len > fit.len)) fit = s;
+    }
+    const s = fit || best;
+    if (!s) return null;
+    if (fit || (s.k === 1) === (s.k === pts.length - 1)) return { x: (s.a.x + s.b.x) / 2, y: (s.a.y + s.b.y) / 2 };
+    return s.len >= w / 2 + 8 ? (s.k === 1 ? { x: s.b.x, y: s.b.y } : { x: s.a.x, y: s.a.y }) : null;
   }
   // Avatars, company tiles and tag colours come from core.js (C.avatar, C.coTile, C.tagFor), so the board matches the lists.
 
@@ -146,6 +198,7 @@
     // Motion state: what the last render showed, which card the pointer or keyboard is on.
     let shownSel = null, firstRender = true, hoverId = null, ptrHover = null, keyHover = null, easeT = 0;
     const view = { x: 0, y: 0, k: 1 };
+    let routed = []; // each drawn line's corner points, so fit keeps a line that loops round a card in view
 
     root.classList.add("board");
     if (opts.compact) root.classList.add("compact");
@@ -166,6 +219,15 @@
     const visible = (id) => !lay.keep || lay.keep.has(id);
     const shown = graph.nodes.filter((n) => visible(n.id) && lay.pos[n.id]);
     const shownEdges = graph.edges.filter((e) => visible(e.a) && visible(e.b) && lay.pos[e.a] && lay.pos[e.b]);
+    // Each person's lines in their own colour (yours in the accent) and, where lines share a gutter or channel, their own lane,
+    // so on a busy board you can follow whose line is whose. Their avatar wears the colour as a ring.
+    const OWNER_COLORS = ["#3b82f6", "#ea580c", "#db2777", "#8b5cf6", "#0d9488", "#d97706", "#dc2626", "#0891b2", "#6366f1"];
+    const isPerson = (id) => id === "you" || (byId[id] && byId[id].type === "person");
+    const ownerOf = (e) => (isPerson(e.a) ? e.a : isPerson(e.b) ? e.b : e.a);
+    const owners = [...new Set(graph.edges.map(ownerOf))].sort((a, b) => (a === "you") - (b === "you") ? (a === "you" ? -1 : 1) : 0);
+    const others = owners.filter((id) => id !== "you");
+    const colorOf = (id) => (id === "you" ? "var(--accent)" : OWNER_COLORS[others.indexOf(id) % OWNER_COLORS.length]);
+    const laneOf = (id) => Math.max(-18, Math.min(18, (owners.indexOf(id) - (owners.length - 1) / 2) * (opts.compact ? 3 : 4)));
 
     function nodeHtml(n) {
       const p = lay.pos[n.id], b = boxOf(n, p);
@@ -173,7 +235,9 @@
       const links = graph.edges.filter((e) => e.a === n.id || e.b === n.id).length;
       const label = n.label + (n.sub ? ", " + n.sub : "") + (n.status ? ", " + n.status : "") + ". " + links + " links.";
       if (n.type === "person") {
-        return '<button type="button" class="node person' + (n.mentioned ? " mentioned" : "") + '" data-id="' + esc(n.id) + '" ' + style + ' aria-label="' + esc(label) + '" title="' + esc(n.label + (n.sub ? ' · ' + n.sub : '')) + '">'
+        const own = owners.includes(n.id);
+        return '<button type="button" class="node person' + (n.mentioned ? " mentioned" : "") + (own ? " owned" : "") + '" data-id="' + esc(n.id) + '" '
+          + (own ? style.replace('style="', 'style="--owner:' + colorOf(n.id) + ";") : style) + ' aria-label="' + esc(label) + '" title="' + esc(n.label + (n.sub ? ' · ' + n.sub : '')) + '">'
           + window.C.avatar({ name: n.label, email: n.id.slice(2) }) + '<span class="node-text"><span class="node-name">' + esc(n.label) + '</span><span class="node-sub">' + esc(n.sub) + "</span></span></button>";
       }
       if (n.type === "you") return '<button type="button" class="node you" data-id="you" ' + style + ' aria-label="' + esc("You (" + n.sub + ")") + '" title="' + esc("You · " + n.sub) + '">' + '<span class="avatar you-av" aria-hidden="true"><span class="avatar-ini">' + esc(window.C.ME.initial) + '</span></span><span class="node-text"><span class="node-name">You</span><span class="node-sub">' + esc(n.sub) + "</span></span>" + (opts.compact ? "" : '<span class="you-tag">Your network</span>') + '</button>';
@@ -198,12 +262,13 @@
     function router() {
       const sideAnchor = (b, toX) => (toX < b.cx - 2 ? { x: b.x, y: b.cy, nx: -1 } : { x: b.x + b.w, y: b.cy, nx: 1 });
       if (opts.mode === "stack") {
-        // Each right-hand card gets its own vertical lane, so lines run side by side instead of on top of each other.
+        // Each right-hand card gets its own vertical lane, so lines run side by side instead of on top of each other. Lines drop
+        // to cards on their row or lower, so a lower card's lane sits further left: a line into a higher card then never crosses it.
         const right = shown.filter((n) => !frameOf[n.id]).sort((a, b) => lay.pos[a.id].y - lay.pos[b.id].y).map((n) => n.id);
-        const lane = (id) => (right.indexOf(id) - (right.length - 1) / 2) * (opts.compact ? 6 : 10);
+        const lane = (id) => ((right.length - 1) / 2 - right.indexOf(id)) * (opts.compact ? 6 : 10);
         return (e) => {
           const A = boxOf(byId[e.a], lay.pos[e.a]), B = boxOf(byId[e.b], lay.pos[e.b]);
-          const same = Math.abs(A.cx - B.cx) < 4;
+          const same = A.x < B.x + B.w && B.x < A.x + A.w; // one above the other in a column (cards differ in width, so not by centre)
           return sideRoute(same ? { x: A.x + A.w, y: A.cy, nx: 1 } : sideAnchor(A, B.cx), same ? { x: B.x + B.w, y: B.cy, nx: 1 } : sideAnchor(B, A.cx), lane(frameOf[e.a] ? e.b : e.a));
         };
       }
@@ -212,26 +277,27 @@
       const top = Math.min(...fs.map((f) => f.y)), bottom = Math.max(...fs.map((f) => f.y + f.h));
       const yT = top - 36, yB = bottom + 36;
       const gutters = fs.map((f, i) => (i ? (fs[i - 1].x + fs[i - 1].w + f.x) / 2 : f.x - GUT)).concat([fs[fs.length - 1].x + fs[fs.length - 1].w + GUT]);
-      const port = (id, other) => {
+      // o: the line's lane (laneOf its person), so different people's lines run side by side in a shared gutter or channel.
+      const port = (id, other, o) => {
         const b = boxOf(byId[id], lay.pos[id]), f = frameOf[id];
         if (f) {
           const right = other.cx >= f.x + f.w / 2, i = fs.indexOf(f) + (right ? 1 : 0);
-          return { a: { x: right ? b.x + b.w : b.x, y: b.cy }, p: { x: gutters[i], y: b.cy }, k: "g" };
+          return { a: { x: right ? b.x + b.w : b.x, y: b.cy }, p: { x: gutters[i] + o, y: b.cy }, k: "g" };
         }
-        if (b.cy < top) return { a: { x: b.cx, y: b.y + b.h }, p: { x: b.cx, y: yT }, k: "t" };
-        return { a: { x: b.cx, y: b.y }, p: { x: b.cx, y: yB }, k: "b" };
+        if (b.cy < top) return { a: { x: b.cx + o, y: b.y + b.h }, p: { x: b.cx + o, y: yT + o }, k: "t" };
+        return { a: { x: b.cx + o, y: b.y }, p: { x: b.cx + o, y: yB + o }, k: "b" };
       };
-      const link = (P, kp, Q, kq) => {
-        if (kp === kq) return kp === "g" && P.x !== Q.x ? [P, { x: P.x, y: yB }, { x: Q.x, y: yB }, Q] : [P, Q];
-        if (kp === "g") return [P, { x: P.x, y: kq === "t" ? yT : yB }, Q];
-        if (kq === "g") return [P, { x: Q.x, y: kp === "t" ? yT : yB }, Q];
-        const want = (P.x + Q.x) / 2, gx = gutters.reduce((g, x) => (Math.abs(x - want) < Math.abs(g - want) ? x : g), gutters[0]);
+      const link = (P, kp, Q, kq, o) => {
+        if (kp === kq) return kp === "g" && P.x !== Q.x ? [P, { x: P.x, y: yB + o }, { x: Q.x, y: yB + o }, Q] : [P, Q];
+        if (kp === "g") return [P, { x: P.x, y: (kq === "t" ? yT : yB) + o }, Q];
+        if (kq === "g") return [P, { x: Q.x, y: (kp === "t" ? yT : yB) + o }, Q];
+        const want = (P.x + Q.x) / 2, gx = gutters.reduce((g, x) => (Math.abs(x - want) < Math.abs(g - want) ? x : g), gutters[0]) + o;
         return [P, { x: gx, y: P.y }, { x: gx, y: Q.y }, Q];
       };
       return (e) => {
-        const A = boxOf(byId[e.a], lay.pos[e.a]), B = boxOf(byId[e.b], lay.pos[e.b]);
-        const pa = port(e.a, B), pb = port(e.b, A);
-        return [pa.a].concat(link(pa.p, pa.k, pb.p, pb.k), [pb.a]);
+        const A = boxOf(byId[e.a], lay.pos[e.a]), B = boxOf(byId[e.b], lay.pos[e.b]), o = laneOf(ownerOf(e));
+        const pa = port(e.a, B, o), pb = port(e.b, A, o);
+        return [pa.a].concat(link(pa.p, pa.k, pb.p, pb.k, o), [pb.a]);
       };
     }
 
@@ -252,22 +318,26 @@
       const edgeOn = (e) => !selected || e.a === selected || e.b === selected;
       const wasOn = (e) => !prevSel || e.a === prevSel || e.b === prevSel;
       const route = router();
+      const lines = routed = shownEdges.map((e) => clean(route(e)));
+      // Only the lit lines carry labels, so a label only has to keep off the other lit lines (a dimmed one under it is fine).
+      const litLines = lines.map((p, j) => (edgeOn(shownEdges[j]) ? p : []));
       const paths = [], dots = [], labels = [];
       // Labels show only for the selected card, so the board stays quiet.
       const showLabels = !opts.compact && selected;
       shownEdges.forEach((e, i) => {
-        const c = roundPath(route(e), opts.compact ? 10 : 14);
+        const c = roundPath(lines[i], opts.compact ? 10 : 14);
         const on = edgeOn(e), cls = (on ? "" : " dim") + (selected && on ? " lit" : "");
         const fade = animSel && on !== wasOn(e) ? (on ? " fade-in" : " fade-out") : "";
         // While the accent line draws out of the selected card, the grey line stays underneath it.
         if (animSel && selected && on) paths.push('<path class="edge ' + e.kind + '" d="' + c.d + '"/>');
-        paths.push('<path class="edge ' + e.kind + cls + fade + '" data-e="' + i + '" d="' + c.d + '"/>');
-        c.ends.forEach((p) => dots.push('<circle class="edot' + cls + fade + (animSel && selected && on ? " pop" : "") + '" data-e="' + i + '" cx="' + p.x + '" cy="' + p.y + '" r="' + (opts.compact ? 3 : 3.5) + '"/>'));
-        if (e.label && showLabels && on) labels.push({ i, e, x: c.mid.x, y: c.mid.y });
+        const col = colorOf(ownerOf(e));
+        paths.push('<path class="edge ' + e.kind + cls + fade + '" data-e="' + i + '" style="stroke:' + col + '" d="' + c.d + '"/>');
+        c.ends.forEach((p) => dots.push('<circle class="edot' + cls + fade + (animSel && selected && on ? " pop" : "") + '" data-e="' + i + '" style="fill:' + col + '" cx="' + p.x + '" cy="' + p.y + '" r="' + (opts.compact ? 3 : 3.5) + '"/>'));
+        if (e.label && showLabels && on) { const w = labelW(e.label); labels.push(Object.assign({ i, e, w }, labelSpot(litLines, i, w) || c.mid)); }
       });
       // Nudge labels that would sit on top of each other.
       labels.sort((a, b) => a.y - b.y || a.x - b.x).forEach((l, k, arr) => {
-        for (let j = 0; j < k; j++) if (Math.abs(arr[j].x - l.x) < 130 && Math.abs(arr[j].y - l.y) < 28) l.y = arr[j].y + 28;
+        for (let j = 0; j < k; j++) if (Math.abs(arr[j].x - l.x) < (arr[j].w + l.w) / 2 + 8 && Math.abs(arr[j].y - l.y) < 28) l.y = arr[j].y + 28;
       });
       // Lit lines draw last so the selected path sits on top.
       const xs = shown.map((n) => lay.pos[n.id].x), x0 = Math.min(...xs) - 200, x1 = Math.max(...xs) + 200;
@@ -389,6 +459,7 @@
       const xs = [], ys = [];
       shown.forEach((n) => { const b = boxOf(n, lay.pos[n.id]); xs.push(b.x, b.x + b.w); ys.push(b.y, b.y + b.h); });
       lay.frames.forEach((f) => { xs.push(f.x, f.x + f.w); ys.push(f.y, f.y + f.h); });
+      routed.forEach((pts) => pts.forEach((p) => { xs.push(p.x); ys.push(p.y); }));
       const pad = opts.compact ? 12 : 40;
       const minX = Math.min(...xs) - pad, maxX = Math.max(...xs) + pad, minY = Math.min(...ys) - pad, maxY = Math.max(...ys) + pad;
       // Keep the floating zoom bar (bottom) clear of the content.
