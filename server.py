@@ -963,7 +963,9 @@ def event_to_invite(ev, me_email, records):
     return {
         "id": cid, "title": title, "company": company, "domain": domain, "noCompany": not domain,
         "when": when_string(start, end), "start": s_et.isoformat(), "end": e_et.isoformat(),
-        "attendees": people, "notes": plain_text(ev.get("description")), "meetingCode": meeting_code(ev), "zoomId": zoom_id(ev),
+        # internal: a colleague (your own work domain), so the People map never files them under "Personal email"
+        "attendees": [dict(p, internal=True) if mine and not personal_domain(mine) and domain_of(p["email"]) == mine else p for p in people],
+        "notes": plain_text(ev.get("description")), "meetingCode": meeting_code(ev), "zoomId": zoom_id(ev),
         "versionFile": "", "backstageSince": None,
         "afterNotes": str(((records.get("callNotes") or {}).get(cid) or {}).get("text", "")),
     }
@@ -4388,7 +4390,8 @@ def extract_mentions(lines, ctx, hints=None):
 
     def ok_first(w):
         lw = w.lower()
-        return lw not in STARTWORDS and not _bad_word(w, ctx) and lw not in ctx["attendeeFirst"] and lw not in ctx["meFirst"]
+        return (lw not in STARTWORDS and not _bad_word(w, ctx) and lw not in ctx["attendeeFirst"] and lw not in ctx["meFirst"]
+                and not _guest_named(lw, _guests(ctx)))  # a guest's run-together calendar name ("Shlokparekh") starts with it
 
     def full_name(words, line, sent, a, b):
         while words and words[0].lower() in STARTWORDS:
@@ -4665,7 +4668,8 @@ def _org_ok(name, ctx, people_names):
     nn = norm_name(name)
     if nn in ctx["attendees"] or nn in ctx["me"] or nn in people_names:
         return False
-    if len(words) == 1 and (low[0] in ctx["attendeeFirst"] or low[0] in ctx["meFirst"] or low[0] in {p.split()[0] for p in people_names if p}):
+    if len(words) == 1 and (low[0] in ctx["attendeeFirst"] or low[0] in ctx["meFirst"] or low[0] in {p.split()[0] for p in people_names if p}
+                            or _guest_named(low[0], _guests(ctx))):
         return False
     return True
 
@@ -5997,7 +6001,8 @@ def _save_ai_mentions(call_id, ctx, heard, source="captions"):
         if e["kind"] == "person":
             nn = norm_name(e["name"])
             words = nn.split()
-            if not words or nn in ctx.get("attendees", set()) or nn in ctx.get("me", set()) or (len(words) == 1 and (words[0] in ctx.get("attendeeFirst", set()) or words[0] in ctx.get("meFirst", set()))):
+            if not words or nn in ctx.get("attendees", set()) or nn in ctx.get("me", set()) or (len(words) == 1 and (words[0] in ctx.get("attendeeFirst", set()) or words[0] in ctx.get("meFirst", set())
+                                                                                                                   or _guest_named(words[0], _guests(ctx)))):
                 continue
             company = e["company"] if e["company"] and norm_org(e["company"]) != own and "spotify" not in norm_org(e["company"]) and not _codename_near(e["company"], e["company"]) else ""
             role = e["role"] if e["role"] and ROLE_OR_TEAM_RE.fullmatch(e["role"]) and e["role"].lower() in text.lower() and not CODENAME_RE.search(e["role"]) else ""

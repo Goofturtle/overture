@@ -451,7 +451,7 @@
       });
       const co = n.type === "person" ? byId[n.company] : null;
       if (co && !co.group) rels.unshift({ other: co.label, otherId: n.company, kind: "works", label: "works at", why: n.label + " is " + n.sub + " at " + co.label + ".", src: "sample" });
-      else if (co && !co.callId) rels.unshift({ other: co.label, otherId: n.company, kind: "personal", label: "", why: "Overture can't tell where " + n.label + " works from a personal email address.", src: "sample" });
+      else if (co && co.id === "grp:personal") rels.unshift({ other: co.label, otherId: n.company, kind: "personal", label: "", why: "Overture can't tell where " + n.label + " works from a personal email address.", src: "sample" });
       return { node: n, rels, callId: n.callId || (n.company && byId[n.company].callId) || null };
     }
 

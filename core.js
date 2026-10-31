@@ -934,7 +934,7 @@
 
   // ---------- relationship graph (for the people map) ----------
   // Nodes: you, prospect companies, the people at them, and the places they came from. Edges carry a kind and a short label.
-  const GROUP_PERSONAL = "grp:personal";
+  const GROUP_PERSONAL = "grp:personal", GROUP_TEAM = "grp:team";
   function relationshipGraph() {
     const nodes = [{ id: "you", type: "you", label: "You", sub: MODE === "demo" ? "Chris · Spotify" : ME.name === "You" ? "You" : ME.name, src: "sample" }];
     const edges = [];
@@ -954,7 +954,7 @@
     // its title never becomes one: its guests share one "Personal email" group, and people mentioned on it sit under the call's name.
     const group = (id, label, inv) => {
       let n = nodes.find((x) => x.id === id);
-      if (!n) nodes.push(n = { id, type: "prospect", group: true, label, callId: id === GROUP_PERSONAL ? null : inv.id, calls: [], status: "", src: "call" });
+      if (!n) nodes.push(n = { id, type: "prospect", group: true, label, callId: id === GROUP_PERSONAL || id === GROUP_TEAM ? null : inv.id, calls: [], status: "", src: "call" });
       if (!n.calls.includes(inv.id)) n.calls.push(inv.id);
       return id;
     };
@@ -972,7 +972,8 @@
         const id = "p:" + a.email;
         const seen = nodes.find((n) => n.id === id);
         if (seen) { if (!seen.calls.includes(inv.id)) seen.calls.push(inv.id); return; } // on more than one call: still one card
-        nodes.push({ id, type: "person", label: a.name, sub: p.title || "Title unknown", company: co, callId: inv.id, calls: [inv.id], startedAt: p.startedAt, src: "sample", note: p.note || "", previous: p.previous || "" });
+        const frame = a.internal ? group(GROUP_TEAM, "Your team", inv) : co; // a colleague isn't "Personal email", nor at the prospect
+        nodes.push({ id, type: "person", label: a.name, sub: p.title || "Title unknown", company: frame, callId: inv.id, calls: [inv.id], startedAt: p.startedAt, src: "sample", note: p.note || "", previous: p.previous || "" });
         if (p.previous) {
           const prevId = company(p.previous);
           const prev = nodes.find((n) => n.id === prevId);
