@@ -1347,7 +1347,7 @@ class ServerEndToEnd(ServerBase):
         st, txt, _ = self.req("GET", "/api/status")
         j = json.loads(txt)
         self.assertEqual(st, 200)
-        self.assertEqual(set(j), {"hosted", "claude", "google", "ai", "hubspot", "gong", "granola", "meetily"})
+        self.assertEqual(set(j), {"hosted", "claude", "google", "ai", "hubspot", "gong", "granola", "meetily", "signinsViewer"})
         self.assertEqual((j["hubspot"]["configured"], j["hubspot"]["connected"], j["gong"]["configured"], j["gong"]["connected"]), (False, False, False, False))
         st, txt, h = self.req("GET", "/data/live.js")
         self.assertEqual(st, 200)
