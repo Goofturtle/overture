@@ -5996,7 +5996,8 @@ def _save_ai_mentions(call_id, ctx, heard, source="captions"):
             e["name"], _was = _closest_org(e["name"], ctx)
         if brief["heardAs"] or brief.get("companyHeard"):
             misheard.append({"kind": e["kind"], "speaker": e["quote"].get("speaker", ""), "time": e["quote"].get("time", ""),
-                             "words": brief["heardAs"] or e["spoken"], "co": brief.get("companyHeard", ""), "name": bool(brief["heardAs"])})
+                             "words": brief["heardAs"] or e["spoken"], "co": brief.get("companyHeard", ""), "name": bool(brief["heardAs"]),
+                             "aiCo": e["company"] if e["kind"] == "person" else e["name"]})
         brief = {k: v for k, v in brief.items() if v}
         if e["kind"] == "person":
             nn = norm_name(e["name"])
@@ -6028,11 +6029,14 @@ def _save_ai_mentions(call_id, ctx, heard, source="captions"):
     blk = (load_records().get("mentions") or {}).get(call_id) or {}
     for m in misheard:  # e.g. the rules saved "Ravy" at "DKS" from the same caption
         same = lambda it: not it.get("aiFound") and (it.get("quote") or {}).get("speaker", "") == m["speaker"] and (it.get("quote") or {}).get("time", "") == m["time"]
+        heard_orgs = {norm_org(m["words"]) if m["kind"] == "company" else "", norm_org(m["co"])} - {""}
         if m["kind"] == "person":  # that person as heard; when only their company was misheard, only the one named with it
             first = norm_name(m["words"]).split()[:1]
-            drop |= {it["key"] for it in blk.get("items") or [] if same(it) and first and norm_name(it.get("name", "")).split()[:1] == first
-                     and (m["name"] or str(it.get("role") or "").lower() == "at " + m["co"].lower())}
-        heard_orgs = {norm_org(m["words"]) if m["kind"] == "company" else "", norm_org(m["co"])} - {""}
+            hits = [it for it in blk.get("items") or [] if same(it) and first and norm_name(it.get("name", "")).split()[:1] == first
+                    and (m["name"] or str(it.get("role") or "").lower() == "at " + m["co"].lower())]
+            drop |= {it["key"] for it in hits}
+            # their company as the rules heard it ("DKS"), when Claude fixed it to another (TKS): that company was misheard too
+            heard_orgs |= {norm_org(w) for it in hits for w in (it.get("companyHeard") or "", str(it.get("role") or "")[3:] if str(it.get("role") or "").startswith("at ") else "")} - {norm_org(m["aiCo"]), ""}
         drop |= {it["key"] for it in blk.get("orgs") or [] if same(it) and norm_org(it.get("name", "")) in heard_orgs}
     try:
         block, new, go, wait, new_o, unqueue = save_mentions(call_id, ctx, people, source, orgs, bump=False, supersede=frozenset(drop))
@@ -6065,7 +6069,8 @@ def live_semantic_step(call_id):
         state["passes"] = state.get("passes", 0) + 1
         state["running"] = True
     try:
-        call = _semantic_call(state.get("ctx"))
+        ctx = state.get("ctx")  # one copy for the whole pass: g1 means the same guest when the answer comes back
+        call = _semantic_call(ctx)
         _semantic_status(call_id, "running")
         with SEMANTIC_CAPACITY:
             # Check privacy again immediately before crossing the provider boundary.
@@ -6083,13 +6088,13 @@ def live_semantic_step(call_id):
         cleaned = _clean_live_semantic(call_id, payload, batch, now_iso())
         by_id = {str(line["id"]): line for line in batch}
         heard = _clean_live_entities(payload, batch, call)
-        if heard and state.get("ctx"):
+        if heard and ctx:
             # A caption Meet revised since this pass read it: what the pass heard in the old words is dropped.
             auto = ((load_records().get("callNotes") or {}).get(call_id) or {}).get("autoNotes") or {}
             versions = auto.get("utteranceVersions") or {} if isinstance(auto, dict) else {}
             heard = [e for e in heard if versions.get(e["utteranceId"]) == hashlib.sha256(by_id[e["utteranceId"]]["text"].encode()).hexdigest()]
             if heard:
-                _save_ai_mentions(call_id, state["ctx"], heard, by_id[heard[0]["utteranceId"]].get("source") or "captions")
+                _save_ai_mentions(call_id, ctx, heard, by_id[heard[0]["utteranceId"]].get("source") or "captions")
         with RECORDS_LOCK:
             records = load_records()
             if not live_ai_on(records):
