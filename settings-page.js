@@ -31,7 +31,8 @@
     { id: "research", label: "Research sources and privacy", icon: "shield", sub: "Where Overture may look things up, sites it never uses, and what may go to AI.", words: ["research", "privacy", "sources", "gong", "hubspot", "transcripts", "blocked", "ai", "web"] },
     { id: "appearance", label: "Appearance", icon: "palette", sub: "Light or dark, the accent colour, and how dense the pages are.", words: ["appearance", "theme", "dark", "light", "accent", "colour", "color", "density", "compact"] },
     { id: "deleted", label: "Deleted meetings", icon: "trash", sub: "Meetings you deleted wait here for 30 days, then everything Overture saved for them is erased. Your Google Calendar is never changed.", words: ["deleted", "delete", "trash", "bin", "restore", "removed", "meetings", "calls", "erase", "undo"] },
-  ];
+    { id: "signins", label: "Sign-ins", icon: "users", sub: "Who signed in to Overture or came back, and when. Only you can see this page.", words: ["sign-ins", "signins", "sign in", "logins", "users", "accounts", "visits", "who"] },
+  ].filter((x) => x.id !== "signins" || (window.OVERTURE_STATUS || {}).signinsViewer);
   const BRIEF_LABELS = { opener: ["Opener", "The line to open the call with."], since: ["Since you last spoke", "Alerts and the last thing that happened."], lastTalk: ["Last talk and Gong", "Your last call in Gong and the history in Overture's records."],
     backstage: ["Backstage and version", "Their upgrade bill and Backstage details."], todos: ["To-dos", "What to do or send before the call."], people: ["People", "Who is on the call, and what Overture found about them."],
     security: ["Security notices", "The worst open notices for their version."], rivals: ["Rivals", "Rival tools named in the invite, with prices."], papers: ["Papers", "NDA and security pack."] };
@@ -93,6 +94,8 @@
 
   // ---------- the menus ----------
   const VIEWS = {
+    // Not a setting: who signed in or came back (GET /api/signins answers only your account); signinsLoad fills it in.
+    signins: () => '<div id="signinsList"><p class="st-empty">Loading sign-ins…</p></div>',
     // Not a setting: the calls you deleted (D.hiddenCalls, newest first), each with Restore and Delete for good (app.js does both).
     deleted() {
       const list = D.hiddenCalls || [];
@@ -260,6 +263,17 @@
     claudeKeyRefresh("Removed.");
   });
 
+  // Settings > Sign-ins: newest first, each account's email, what happened and when.
+  async function signinsLoad() {
+    const r = await fetch("/api/signins", { headers: { "X-OVERTURE": "1" } }).then((x) => (x.ok ? x.json() : null)).catch(() => null), el = $("#signinsList");
+    if (!el) return;
+    const list = (r && r.signins) || [], when = (iso) => new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    el.innerHTML = !r ? '<p class="st-empty">Couldn’t load sign-ins. Refresh the page to try again.</p>'
+      : !list.length ? '<p class="st-empty">Nobody else has signed in yet. Your own visits aren’t listed.</p>'
+      : group(plural(list.length, "visit"), list.map((x) => '<div class="st-row"><div class="st-row-text"><span class="st-label">' + esc(x.email) + '</span><p class="st-help">'
+        + esc((x.kind === "signed in" ? "Signed in with Google" : "Opened Overture") + " · " + when(x.at)) + "</p></div></div>").join(""));
+  }
+
   function render(menu) {
     const m = MENUS.find((x) => x.id === menu) || null;
     if (menu && !m) { app().go("#/settings", true); return "Settings"; }
@@ -273,10 +287,11 @@
     const body = m ? '<div class="st-panel"><header class="st-head"><a class="back st-back" href="#/settings" aria-label="Back to Settings">' + ic("chevronLeft") + "<span>Settings</span></a>"
       + '<div class="st-head-row"><h1 class="st-h" tabindex="-1">' + esc(m.label) + '</h1><span class="st-saved" id="stSaved" role="status" aria-live="polite"></span></div>'
       + '<p class="st-sub">' + esc(m.sub) + "</p></header>" + '<div class="st-form">' + VIEWS[m.id](s) + "</div>"
-      + (m.id === "deleted" ? "" : '<div class="st-foot"><button type="button" class="btn ghost sm" data-reset-menu>' + ic("rotate") + "Reset " + esc(m.label.toLowerCase()) + " to defaults</button></div>") + "</div>"
+      + (m.id === "deleted" || m.id === "signins" ? "" : '<div class="st-foot"><button type="button" class="btn ghost sm" data-reset-menu>' + ic("rotate") + "Reset " + esc(m.label.toLowerCase()) + " to defaults</button></div>") + "</div>"
       : '<div class="st-panel st-intro"><p class="st-sub">Pick a menu. Changes save as you make them.</p></div>';
     sec.innerHTML = '<div class="st' + (m ? " has-menu" : "") + '">' + nav + body + "</div>";
     if (page.menu === "research" && !DEMO) claudeKeyRefresh();
+    if (page.menu === "signins") signinsLoad();
     sec.classList.toggle("st-picked", !!m);
     if (page.status) setSaved(page.status);
     return m ? m.label + " · Settings" : "Settings";

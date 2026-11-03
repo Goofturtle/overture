@@ -541,6 +541,8 @@ def session_user(headers, now=None):
     v = load_json(sessions_path(), {}).get(_sid_key(sid))  # no lock: saves replace the file in one step
     now = _time.time() if now is None else now
     ok = isinstance(v, dict) and v.get("exp", 0) > now and isinstance(v.get("uid"), str) and account_allowed(str(v.get("email", "")))
+    if ok:
+        note_signin(str(v["email"]), "opened", now)  # Settings > Sign-ins: who came back, and when
     return v["uid"] if ok else None
 
 
@@ -555,6 +557,44 @@ def end_sessions(uid):
 
 def session_cookie(sid, days=SESSION_DAYS):
     return f"{SESSION_COOKIE}={sid}; Path=/; Max-Age={days * 86400}; HttpOnly; Secure; SameSite=Lax"
+
+
+# Settings > Sign-ins: which accounts signed in or came back, and when. Only SIGNINS_VIEWER sees it (GET /api/signins), and only
+# each account's email, what happened and when are kept, never anything from inside an account. The viewer's own visits aren't kept.
+SIGNINS_VIEWER = "arjunlearns@gmail.com"
+SIGNINS_LOCK = threading.Lock()
+SIGNIN_SEEN = {}  # account id -> when its last visit was kept: a page that polls is one visit per VISIT_GAP, not hundreds
+VISIT_GAP = 30 * 60
+MAX_SIGNINS = 500
+
+
+def signins_path():
+    return DATA_ROOT / "signins.json"
+
+
+def signins_viewer():
+    """The account signed in right now is the one that may see Settings > Sign-ins."""
+    return HOSTED and _USER.get() == account_id(SIGNINS_VIEWER)
+
+
+def signin_log():
+    log = load_json(signins_path(), [])
+    return [x for x in log if isinstance(x, dict)] if isinstance(log, list) else []
+
+
+def note_signin(email, kind, now=None):
+    """kind: "signed in" (through Google) or "opened" (came back still signed in; kept at most once per VISIT_GAP)."""
+    now = _time.time() if now is None else now
+    uid = account_id(email)
+    if uid == account_id(SIGNINS_VIEWER) or (kind == "opened" and now - SIGNIN_SEEN.get(uid, 0) < VISIT_GAP):
+        return
+    SIGNIN_SEEN[uid] = now
+    with SIGNINS_LOCK:
+        log = signin_log() + [{"email": email.strip().lower(), "kind": kind, "at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(now))}]
+        try:
+            save_json(signins_path(), log[-MAX_SIGNINS:])
+        except OSError as e:  # the log must never stop anyone opening Overture
+            print(f"[signins] {type(e).__name__}: this visit wasn't kept", flush=True)
 
 
 def token_info():
@@ -1285,6 +1325,7 @@ def status_body():
     tok = token_info()
     return {
         "hosted": HOSTED,  # the shared site: the page says your data stays in your account, not on this PC
+        "signinsViewer": signins_viewer(),  # Settings shows Sign-ins to this one account
         "claude": claude_on(),  # kept for older pages
         "google": {"configured": bool(google_client()), "connected": bool(tok), "email": (tok or {}).get("email", "")},
         "ai": {"claude": claude_on()},
@@ -7723,6 +7764,10 @@ class Handler(SimpleHTTPRequestHandler):
             if not read_guard_ok(self.headers):
                 return self.send_json(403, {"error": "not allowed"})
             return self.send_json(200, claude_key_state())
+        if path == "/api/signins":  # Settings > Sign-ins, for SIGNINS_VIEWER only: anyone else gets what a missing page gets
+            if not read_guard_ok(self.headers) or not signins_viewer():
+                return self.send_json(404, {"error": "not found"})
+            return self.send_json(200, {"signins": signin_log()[::-1]})
         if path == "/api/research":
             if not read_guard_ok(self.headers):
                 return self.send_json(403, {"error": "not allowed"})
@@ -7788,6 +7833,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_page(400, "Not connected", str(e))
         if HOSTED:  # signed in: this browser now opens this Google account's own Overture
             sid = new_session(tok["email"])
+            note_signin(tok["email"], "signed in")
             return self.send_body(302, b"", "text/plain", {"Location": "/#/home", "Set-Cookie": session_cookie(sid)})
         return self.redirect("/#/home")
 
