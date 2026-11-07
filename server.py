@@ -559,9 +559,9 @@ def session_cookie(sid, days=SESSION_DAYS):
     return f"{SESSION_COOKIE}={sid}; Path=/; Max-Age={days * 86400}; HttpOnly; Secure; SameSite=Lax"
 
 
-# Settings > Sign-ins: which accounts signed in or came back, and when. Only SIGNINS_VIEWER sees it (GET /api/signins), and only
-# each account's email, what happened and when are kept, never anything from inside an account. The viewer's own visits aren't kept.
-SIGNINS_VIEWER = "arjunlearns@gmail.com"
+# Settings > Sign-ins: which accounts signed in or came back, and when. Only SIGNINS_VIEWERS see it (GET /api/signins), and only
+# each account's email, what happened and when are kept, never anything from inside an account. The viewers' own visits aren't kept.
+SIGNINS_VIEWERS = ("arjunlearns@gmail.com", "goofturtles@gmail.com")
 SIGNINS_LOCK = threading.Lock()
 SIGNIN_SEEN = {}  # account id -> when its last visit was kept: a page that polls is one visit per VISIT_GAP, not hundreds
 VISIT_GAP = 30 * 60
@@ -573,8 +573,8 @@ def signins_path():
 
 
 def signins_viewer():
-    """The account signed in right now is the one that may see Settings > Sign-ins."""
-    return HOSTED and _USER.get() == account_id(SIGNINS_VIEWER)
+    """The account signed in right now is one that may see Settings > Sign-ins."""
+    return HOSTED and _USER.get() in {account_id(e) for e in SIGNINS_VIEWERS}
 
 
 def signin_log():
@@ -586,7 +586,7 @@ def note_signin(email, kind, now=None):
     """kind: "signed in" (through Google) or "opened" (came back still signed in; kept at most once per VISIT_GAP)."""
     now = _time.time() if now is None else now
     uid = account_id(email)
-    if uid == account_id(SIGNINS_VIEWER) or (kind == "opened" and now - SIGNIN_SEEN.get(uid, 0) < VISIT_GAP):
+    if uid in {account_id(e) for e in SIGNINS_VIEWERS} or (kind == "opened" and now - SIGNIN_SEEN.get(uid, 0) < VISIT_GAP):
         return
     SIGNIN_SEEN[uid] = now
     with SIGNINS_LOCK:
@@ -7764,7 +7764,7 @@ class Handler(SimpleHTTPRequestHandler):
             if not read_guard_ok(self.headers):
                 return self.send_json(403, {"error": "not allowed"})
             return self.send_json(200, claude_key_state())
-        if path == "/api/signins":  # Settings > Sign-ins, for SIGNINS_VIEWER only: anyone else gets what a missing page gets
+        if path == "/api/signins":  # Settings > Sign-ins, for SIGNINS_VIEWERS only: anyone else gets what a missing page gets
             if not read_guard_ok(self.headers) or not signins_viewer():
                 return self.send_json(404, {"error": "not found"})
             return self.send_json(200, {"signins": signin_log()[::-1]})
